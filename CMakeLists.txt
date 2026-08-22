@@ -46,16 +46,22 @@ endif()
 
 # Platform-specific dependency handling
 if(APPLE)
-    # macOS with Homebrew
-    set(OPUS_PREFIX "/opt/homebrew/opt/opus")
+    # macOS with Homebrew (Apple Silicon: /opt/homebrew, Intel: /usr/local)
+    if(EXISTS "/opt/homebrew/opt/opus")
+        set(HOMEBREW_PREFIX "/opt/homebrew")
+    else()
+        set(HOMEBREW_PREFIX "/usr/local")
+    endif()
+
+    set(OPUS_PREFIX "${HOMEBREW_PREFIX}/opt/opus")
     set(OPUS_INCLUDE_DIRS "${OPUS_PREFIX}/include")
     set(OPUS_LIBRARIES "${OPUS_PREFIX}/lib/libopus.dylib")
 
-    set(HIDAPI_PREFIX "/opt/homebrew/opt/hidapi")
+    set(HIDAPI_PREFIX "${HOMEBREW_PREFIX}/opt/hidapi")
     set(HIDAPI_INCLUDE_DIRS "${HIDAPI_PREFIX}/include")
     set(HIDAPI_LIBRARIES "${HIDAPI_PREFIX}/lib/libhidapi.dylib")
 
-    set(LIBUSB_PREFIX "/opt/homebrew/opt/libusb")
+    set(LIBUSB_PREFIX "${HOMEBREW_PREFIX}/opt/libusb")
     set(LIBUSB_INCLUDE_DIRS "${LIBUSB_PREFIX}/include")
     set(LIBUSB_LIBRARIES "${LIBUSB_PREFIX}/lib/libusb-1.0.dylib")
 elseif(WIN32)
