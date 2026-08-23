@@ -223,11 +223,8 @@ CwController::CwController(RadioState *radioState, ConnectionController *connect
             auto mode = static_cast<RadioState::Mode>(m_cachedMode.load(std::memory_order_acquire));
             if (mode != RadioState::CW && mode != RadioState::CW_R)
                 return; // In voice/data modes, dit is suppressed — PTT signal handles TX
-            if (m_straightKeyMode.load(std::memory_order_acquire)) {
-                m_skDitDown.store(pressed, std::memory_order_release);
-                handleStraightKeyEdge();
-                return;
-            }
+            if (m_straightKeyMode.load(std::memory_order_acquire))
+                return; // Straight Key / Bug: DIT is always ignored — see dahStateChanged below.
             m_keyer->setDitPaddle(pressed);
         },
         Qt::DirectConnection);
@@ -237,13 +234,19 @@ CwController::CwController(RadioState *radioState, ConnectionController *connect
             if (kpodPlusActive())
                 return;
             if (m_straightKeyMode.load(std::memory_order_acquire)) {
-                // Straight-key/bug is CW-only, same gate as the dit handler above —
-                // unlike the iambic path, a dah here drives TX; directly, so it must
-                // not leak into voice/data modes.
+                // Straight Key / Bug: DAH is the sole input — driven from a real, dedicated
+                // line on every HaliKey transport (V1.4: DCD||DSR; MIDI: note 21), unlike DIT
+                // which on V1.4 is impossible to distinguish from the foot pedal (see the PTT
+                // handler below) and is therefore always ignored, on every transport, so a
+                // 2-conductor straight key plugged into the paddle jack (which leaves the DIT
+                // line floating/undefined) can't leak spurious keying.
+                //
+                // Same CW-mode gate as the dit handler above — unlike the iambic path, a dah
+                // here drives TX; directly, so it must not leak into voice/data modes.
                 auto mode = static_cast<RadioState::Mode>(m_cachedMode.load(std::memory_order_acquire));
                 if (mode != RadioState::CW && mode != RadioState::CW_R)
                     return;
-                m_skDahDown.store(pressed, std::memory_order_release);
+                m_skKeyDown.store(pressed, std::memory_order_release);
                 handleStraightKeyEdge();
                 return;
             }
@@ -271,6 +274,16 @@ CwController::CwController(RadioState *radioState, ConnectionController *connect
                     // matching falling edge will see V14PttNone and also drop.
                     if (kpodPlusActive())
                         return;
+                    if (m_straightKeyMode.load(std::memory_order_acquire)) {
+                        // Straight Key / Bug: V1.4's CTS line is the ONLY place a DIT/pedal
+                        // signal shows up (HaliKeyV14Worker hardcodes ditState=false, so
+                        // ditStateChanged never fires on this transport — see
+                        // readPinState()'s doc comment). DIT is always ignored in this mode
+                        // (see dahStateChanged above), so drop this edge the same way the
+                        // MIDI branch below drops its pedal press in CW: no destination
+                        // captured, matching falling edge sees V14PttNone and also drops.
+                        return;
+                    }
                     m_v14PttDestination.store(V14PttDitPaddle, std::memory_order_release);
                     m_keyer->setDitPaddle(true);
                 } else if (!inCw) {
@@ -299,15 +312,15 @@ CwController::CwController(RadioState *radioState, ConnectionController *connect
         Qt::DirectConnection);
 
     // Enable keyer when radio connects, disable on disconnect
-    connect(m_connection, &ConnectionController::radioReady, this,
-            [this]() { QMetaObject::invokeMethod(m_keyer, "setEnabled", Qt::QueuedConnection, Q_ARG(bool, true)); });
+    connect(m_connection, &ConnectionController::radioReady, this, [this]() {
+        QMetaObject::invokeMethod(m_keyer, "setEnabled", Qt::QueuedConnection, Q_ARG(bool, true));
+    });
     connect(m_connection, &ConnectionController::connectionStateChanged, this,
             [this](TcpClient::ConnectionState state) {
                 if (state == TcpClient::Disconnected) {
                     QMetaObject::invokeMethod(m_keyer, "setEnabled", Qt::QueuedConnection, Q_ARG(bool, false));
                     // Socket's already down — just reset local state, nothing to send.
-                    m_skDitDown.store(false, std::memory_order_release);
-                    m_skDahDown.store(false, std::memory_order_release);
+                    m_skKeyDown.store(false, std::memory_order_release);
                     m_skKeyed.store(false, std::memory_order_release);
                     m_straightKeyWatchdog->stop();
                     QMetaObject::invokeMethod(m_sidetone, "stopHold", Qt::QueuedConnection);
@@ -368,7 +381,7 @@ void CwController::applyPaddleReversal() {
 }
 
 void CwController::handleStraightKeyEdge() {
-    const bool down = m_skDitDown.load(std::memory_order_acquire) || m_skDahDown.load(std::memory_order_acquire);
+    const bool down = m_skKeyDown.load(std::memory_order_acquire);
     bool expected = !down;
     if (!m_skKeyed.compare_exchange_strong(expected, down, std::memory_order_acq_rel))
         return; // already in the requested state — no edge to act on
@@ -386,8 +399,7 @@ void CwController::handleStraightKeyEdge() {
 }
 
 void CwController::forceStraightKeyRelease() {
-    m_skDitDown.store(false, std::memory_order_release);
-    m_skDahDown.store(false, std::memory_order_release);
+    m_skKeyDown.store(false, std::memory_order_release);
     if (!m_skKeyed.exchange(false, std::memory_order_acq_rel))
         return; // wasn't keyed — nothing to release
     m_connection->sendCAT(QStringLiteral("RX;"));

@@ -68,9 +68,17 @@ CwKeyerPage::CwKeyerPage(HalikeyDevice *halikeyDevice, QWidget *parent)
             [](bool checked) { RadioSettings::instance()->setHalikeyPaddleSwapped(checked); });
     layout->addWidget(m_swapPaddlesCheck);
 
-    // Straight Key / Bug — bypasses the iambic keyer entirely. Raw contact closures on
-    // either paddle line drive TX;/RX; directly, matching how a hand key or semi-automatic
-    // bug actually keys a transmitter (arbitrary-duration keydown, no element shaping).
+    // Straight Key / Bug — bypasses the iambic keyer entirely. The DAH line drives TX;/RX;
+    // directly (arbitrary-duration keydown, no element shaping). DIT is always ignored,
+    // even when this mode is on — the HaliKey V1.4's dit lever and its foot-pedal input
+    // are electrically indistinguishable, so treating DIT as a key input would also fire
+    // on a pedal press, and a mono-plug key would short both. Wire the key to DAH.
+    //
+    // KNOWN LIMITATION (2026-08-22): TX;/RX; is accepted by the radio but does not key a
+    // carrier on the K4/0 remote protocol this app uses — confirmed against real hardware.
+    // Local sidetone plays correctly; the transmitter does not key. Left in place pending
+    // word from Elecraft on whether a remote CW key-down primitive exists. See the note on
+    // CwController::handleStraightKeyEdge().
     m_straightKeyCheck = new QCheckBox("Straight Key / Bug (bypass iambic keyer)", this);
     m_straightKeyCheck->setStyleSheet(K4Styles::Dialog::checkBox());
     m_straightKeyCheck->setChecked(RadioSettings::instance()->halikeyStraightKeyMode());
@@ -79,8 +87,9 @@ CwKeyerPage::CwKeyerPage(HalikeyDevice *halikeyDevice, QWidget *parent)
     layout->addWidget(m_straightKeyCheck);
 
     auto *straightKeyHelpLabel =
-        new QLabel("A plain straight key wires to the DIT line only. A semi-automatic bug uses both — "
-                   "mechanical dits on DIT, manual dahs on DAH.",
+        new QLabel("Wire your key to the DAH line (DIT is always ignored). "
+                   "Known limitation: this currently keys local sidetone only — the "
+                   "transmitter itself does not key yet. Fix pending.",
                    this);
     straightKeyHelpLabel->setWordWrap(true);
     straightKeyHelpLabel->setStyleSheet(K4Styles::Dialog::helpText());

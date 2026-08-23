@@ -207,19 +207,25 @@ private:
     // KPOD+ has its own onboard keyer and continues to mirror the K4 directly.
     void applyPaddleReversal();
 
-    // Straight Key / Bug mode: bypasses IambicKeyer entirely. Recomputes the
-    // combined raw contact state (m_skDitDown OR m_skDahDown — a plain straight
-    // key wires to DIT only; a semi-automatic bug uses both: mechanical dits on
-    // DIT, manual dahs on DAH) and, on a real transition, sends TX;/RX; directly
-    // and starts/stops the sidetone hold. CAS-guarded so a same-direction repeat
-    // (e.g. dit fires again while dah is already holding the key down) never
-    // re-sends TX;/RX;. Called from the HaliKey worker thread — see
-    // "Threading invariants" above; sendCAT and the sidetone invokeMethod calls
-    // are safe from any thread (TcpClient::sendCAT self-marshals; SidetoneGenerator
-    // methods are Q_INVOKABLE).
+    // Straight Key / Bug mode: bypasses IambicKeyer entirely. DAH is the sole input
+    // (m_skKeyDown) — DIT is always ignored (see dahStateChanged/pttStateChanged in the
+    // .cpp for why: on V1.4, DIT is indistinguishable from the foot pedal on the wire, so
+    // routing it into straight-key mode would let a 2-conductor key's floating DIT line
+    // leak spurious keying). On a real transition, sends TX;/RX; directly and starts/stops
+    // the sidetone hold. CAS-guarded so a same-direction repeat never re-sends TX;/RX;.
+    // Called from the HaliKey worker thread — see "Threading invariants" above; sendCAT
+    // and the sidetone invokeMethod calls are safe from any thread (TcpClient::sendCAT
+    // self-marshals; SidetoneGenerator methods are Q_INVOKABLE).
     //
-    // Verified against real K4 hardware: TX;/RX; toggles TQ0/TQ1 cleanly with no
-    // observed side effects at QRP power into a dummy load (2026-08-22).
+    // NOTE (2026-08-22): TX;/RX; verified against real hardware to toggle TQ0/TQ1
+    // cleanly on the legacy CAT port (9200, MD2=CW), but on the K4/0 remote protocol
+    // this app actually uses (9204/9205, MD3=CW) the radio accepts TX; without ever
+    // producing a carrier — confirmed live (S-meter kept updating, TQ stayed 0 the
+    // whole hold). The iambic keyer path never sends TX; at all; KZ elements are
+    // themselves the keying mechanism on this protocol surface, with no separate PTT
+    // step. A real remote key-down primitive for CW may not exist on this port — see
+    // memory/kz-protocol.md (not in this repo) or Elecraft's K4 programmer's
+    // reference before building a replacement mechanism.
     void handleStraightKeyEdge();
 
     // Forces the key up if currently held — used on HaliKey disconnect, radio
@@ -245,17 +251,15 @@ private:
 
     // Straight Key / Bug mode (RadioSettings-backed, HaliKey-scoped).
     // Main-thread release store (ctor + halikeyStraightKeyModeChanged), HaliKey-worker
-    // acquire load in the ditStateChanged/dahStateChanged handlers — same pattern as
+    // acquire load in the dahStateChanged/pttStateChanged handlers — same pattern as
     // m_cachedIsV14 above.
     std::atomic<bool> m_straightKeyMode{false};
 
-    // Per-line raw contact state while straight-key mode is active; OR'd together in
-    // handleStraightKeyEdge() so both a plain straight key (DIT only) and a bug
-    // (mechanical dits on DIT, manual dahs on DAH) key the transmitter correctly.
-    std::atomic<bool> m_skDitDown{false};
-    std::atomic<bool> m_skDahDown{false};
-    // The combined state actually sent to the K4 — CAS-guarded in handleStraightKeyEdge()
-    // so a same-direction repeat never re-sends TX;/RX;.
+    // Raw DAH contact state while straight-key mode is active — the sole input; DIT is
+    // always ignored (see handleStraightKeyEdge's doc comment above).
+    std::atomic<bool> m_skKeyDown{false};
+    // The state actually sent to the K4 — CAS-guarded in handleStraightKeyEdge() so a
+    // repeat of the same value never re-sends TX;/RX;.
     std::atomic<bool> m_skKeyed{false};
 
     // Defense-in-depth against a wedged straight key (stuck contact, dropped edge):

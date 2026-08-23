@@ -213,12 +213,15 @@ void SidetoneGenerator::startHold() {
 
     if (!m_holdTimer) {
         m_holdTimer = new QTimer(this);
-        connect(m_holdTimer, &QTimer::timeout, this, [this]() { writeHoldChunk(false, false); });
+        m_holdTimer->setTimerType(Qt::PreciseTimer);
+        connect(m_holdTimer, &QTimer::timeout, this, [this]() { refillHold(); });
     }
 
     m_holding = true;
-    writeHoldChunk(true, false); // rising envelope on the first chunk only
-    m_holdTimer->start(30);
+    m_holdSamplesWritten = 0;
+    m_holdClock.start();
+    refillHold(); // writes the first kHoldLookaheadMs immediately, with the rise envelope
+    m_holdTimer->start(kHoldTimerIntervalMs);
 }
 
 void SidetoneGenerator::stopHold() {
@@ -227,19 +230,43 @@ void SidetoneGenerator::stopHold() {
     m_holding = false;
     if (m_holdTimer)
         m_holdTimer->stop();
-    writeHoldChunk(false, true); // falling envelope + tail on the last chunk
+    // Close out with a short fixed fall/tail chunk — NOT elapsed-time-targeted like
+    // refillHold(), since the hold is over. Whatever's already buffered (up to
+    // kHoldLookaheadMs) plays out first; this just makes the end of that audible tone
+    // taper instead of cutting off mid-cycle.
+    const int sampleRate = 48000;
+    const int rampSamples = (sampleRate * 3) / 1000; // 3ms fall, matches playElement
+    writeHoldSamples(rampSamples, /*applyRise=*/false, /*applyFall=*/true);
 }
 
-void SidetoneGenerator::writeHoldChunk(bool applyRise, bool applyFall) {
+void SidetoneGenerator::refillHold() {
     if (!m_pushDevice)
         return;
 
     const int sampleRate = 48000;
-    const int chunkMs = 30;
-    const int chunkSamples = (sampleRate * chunkMs) / 1000;
+    const qint64 targetSamples = ((m_holdClock.elapsed() + kHoldLookaheadMs) * sampleRate) / 1000;
+    qint64 samplesToWrite = targetSamples - m_holdSamplesWritten;
+    if (samplesToWrite <= 0)
+        return; // already ahead of the lookahead target — nothing to top up yet
+
+    // Clamp a burst after any long stall (app backgrounded, debugger pause, etc.) so we
+    // don't try to synthesize seconds of audio in one call.
+    const qint64 maxBurstSamples = (sampleRate * 200) / 1000; // 200ms
+    samplesToWrite = qMin(samplesToWrite, maxBurstSamples);
+
+    const bool isFirstChunk = (m_holdSamplesWritten == 0);
+    writeHoldSamples(static_cast<int>(samplesToWrite), /*applyRise=*/isFirstChunk, /*applyFall=*/false);
+    m_holdSamplesWritten += samplesToWrite;
+}
+
+void SidetoneGenerator::writeHoldSamples(int numSamples, bool applyRise, bool applyFall) {
+    if (!m_pushDevice || numSamples <= 0)
+        return;
+
+    const int sampleRate = 48000;
     const int rampSamples = (sampleRate * 3) / 1000; // 3ms rise/fall, matches playElement
 
-    const int bufferBytes = chunkSamples * static_cast<int>(sizeof(qint16));
+    const int bufferBytes = numSamples * static_cast<int>(sizeof(qint16));
     if (m_elementBuffer.capacity() < bufferBytes)
         m_elementBuffer.reserve(bufferBytes);
     m_elementBuffer.resize(bufferBytes);
@@ -249,12 +276,12 @@ void SidetoneGenerator::writeHoldChunk(bool applyRise, bool applyFall) {
     float vol = m_volume.load(std::memory_order_relaxed);
     double phaseIncrement = 2.0 * M_PI * freq / sampleRate;
 
-    for (int i = 0; i < chunkSamples; ++i) {
+    for (int i = 0; i < numSamples; ++i) {
         float envelope = 1.0f;
         if (applyRise && i < rampSamples) {
             envelope = 0.5f * (1.0f - qCos(M_PI * i / rampSamples));
-        } else if (applyFall && i >= chunkSamples - rampSamples) {
-            int fallIndex = i - (chunkSamples - rampSamples);
+        } else if (applyFall && i >= numSamples - rampSamples) {
+            int fallIndex = i - (numSamples - rampSamples);
             envelope = 0.5f * (1.0f + qCos(M_PI * fallIndex / rampSamples));
         }
 
