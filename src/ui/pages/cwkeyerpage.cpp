@@ -68,17 +68,13 @@ CwKeyerPage::CwKeyerPage(HalikeyDevice *halikeyDevice, QWidget *parent)
             [](bool checked) { RadioSettings::instance()->setHalikeyPaddleSwapped(checked); });
     layout->addWidget(m_swapPaddlesCheck);
 
-    // Straight Key / Bug — bypasses the iambic keyer entirely. The DAH line drives TX;/RX;
-    // directly (arbitrary-duration keydown, no element shaping). DIT is always ignored,
-    // even when this mode is on — the HaliKey V1.4's dit lever and its foot-pedal input
-    // are electrically indistinguishable, so treating DIT as a key input would also fire
-    // on a pedal press, and a mono-plug key would short both. Wire the key to DAH.
-    //
-    // KNOWN LIMITATION (2026-08-22): TX;/RX; is accepted by the radio but does not key a
-    // carrier on the K4/0 remote protocol this app uses — confirmed against real hardware.
-    // Local sidetone plays correctly; the transmitter does not key. Left in place pending
-    // word from Elecraft on whether a remote CW key-down primitive exists. See the note on
-    // CwController::handleStraightKeyEdge().
+    // Straight Key / Bug — bypasses the iambic keyer entirely. The DAH line drives the
+    // radio's TUNE toggle (SW16;) directly (arbitrary-duration keydown, no element
+    // shaping) — see CwController::handleStraightKeyEdge() for why TUNE rather than TX;.
+    // DIT is always ignored, even when this mode is on — the HaliKey V1.4's dit lever and
+    // its foot-pedal input are electrically indistinguishable, so treating DIT as a key
+    // input would also fire on a pedal press, and a mono-plug key would short both. Wire
+    // the key to DAH.
     m_straightKeyCheck = new QCheckBox("Straight Key / Bug (bypass iambic keyer)", this);
     m_straightKeyCheck->setStyleSheet(K4Styles::Dialog::checkBox());
     m_straightKeyCheck->setChecked(RadioSettings::instance()->halikeyStraightKeyMode());
@@ -87,9 +83,9 @@ CwKeyerPage::CwKeyerPage(HalikeyDevice *halikeyDevice, QWidget *parent)
     layout->addWidget(m_straightKeyCheck);
 
     auto *straightKeyHelpLabel =
-        new QLabel("Wire your key to the DAH line (DIT is always ignored). "
-                   "Known limitation: this currently keys local sidetone only — the "
-                   "transmitter itself does not key yet. Fix pending.",
+        new QLabel("Wire your key to the DAH line (DIT is always ignored). Keys the "
+                   "transmitter via the radio's TUNE function, since the K4's remote "
+                   "protocol has no direct CW key-down command.",
                    this);
     straightKeyHelpLabel->setWordWrap(true);
     straightKeyHelpLabel->setStyleSheet(K4Styles::Dialog::helpText());
