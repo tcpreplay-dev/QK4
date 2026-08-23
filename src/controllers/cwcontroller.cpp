@@ -25,8 +25,7 @@ CwController::CwController(RadioState *radioState, ConnectionController *connect
     QMetaObject::invokeMethod(
         m_keyer, "setMode", Qt::QueuedConnection,
         Q_ARG(IambicKeyer::Mode, m_radioState->iambicMode() == 'B' ? IambicKeyer::IambicB : IambicKeyer::IambicA));
-    QMetaObject::invokeMethod(m_keyer, "setReversed", Qt::QueuedConnection,
-                              Q_ARG(bool, m_radioState->paddleOrientation() == 'R'));
+    applyPaddleReversal();
 
     if (m_radioState->cwPitch() > 0) {
         QMetaObject::invokeMethod(m_sidetone, "setFrequency", Qt::QueuedConnection,
@@ -62,10 +61,15 @@ CwController::CwController(RadioState *radioState, ConnectionController *connect
         QMetaObject::invokeMethod(
             m_keyer, "setMode", Qt::QueuedConnection,
             Q_ARG(IambicKeyer::Mode, iambic == 'B' ? IambicKeyer::IambicB : IambicKeyer::IambicA));
-        QMetaObject::invokeMethod(m_keyer, "setReversed", Qt::QueuedConnection, Q_ARG(bool, paddle == 'R'));
+        applyPaddleReversal();
         if (m_kpodPlus->isPolling())
             m_kpodPlus->setKeyerParams(iambic == 'B' ? 1 : 0, paddle == 'R');
     });
+
+    // Local "Swap paddles" toggle (RadioSettings, HaliKey-scoped) — recompute
+    // whenever it changes so it composes correctly with the K4's own KP setting.
+    connect(RadioSettings::instance(), &RadioSettings::halikeyPaddleSwappedChanged, this,
+            [this](bool) { applyPaddleReversal(); });
 
     connect(m_radioState, &RadioState::cwPitchChanged, this, [this](int pitchHz) {
         QMetaObject::invokeMethod(m_sidetone, "setFrequency", Qt::QueuedConnection, Q_ARG(int, pitchHz));
@@ -304,4 +308,11 @@ CwController::~CwController() {
 
 bool CwController::kpodPlusActive() const {
     return m_connection->isKpodPlusKeyerActive();
+}
+
+void CwController::applyPaddleReversal() {
+    const bool radioReversed = m_radioState->paddleOrientation() == 'R';
+    const bool localSwap = RadioSettings::instance()->halikeyPaddleSwapped();
+    QMetaObject::invokeMethod(m_keyer, "setReversed", Qt::QueuedConnection,
+                              Q_ARG(bool, radioReversed != localSwap));
 }

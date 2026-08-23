@@ -58,6 +58,16 @@ CwKeyerPage::CwKeyerPage(HalikeyDevice *halikeyDevice, QWidget *parent)
     deviceTypeLayout->addWidget(m_cwKeyerDeviceTypeCombo, 1);
     layout->addLayout(deviceTypeLayout);
 
+    // Swap paddles — local override, independent of the K4's own paddle-orientation
+    // setting (KP). Only affects the HaliKey path; KPOD+ has its own onboard keyer
+    // and mirrors the K4 directly (see CwController).
+    m_swapPaddlesCheck = new QCheckBox("Swap paddles (dit/dah)", this);
+    m_swapPaddlesCheck->setStyleSheet(K4Styles::Dialog::checkBox());
+    m_swapPaddlesCheck->setChecked(RadioSettings::instance()->halikeyPaddleSwapped());
+    connect(m_swapPaddlesCheck, &QCheckBox::toggled, this,
+            [](bool checked) { RadioSettings::instance()->setHalikeyPaddleSwapped(checked); });
+    layout->addWidget(m_swapPaddlesCheck);
+
     // Separator line
     auto *line = new QFrame(this);
     line->setFrameShape(QFrame::HLine);

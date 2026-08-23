@@ -200,6 +200,12 @@ private:
     // set, all locally-driven KZ output + sidetone playback is suppressed.
     bool kpodPlusActive() const;
 
+    // Pushes the effective paddle-reversal state to m_keyer: the K4's own
+    // paddle-orientation setting (KP, mirrored via RadioState) XORed with the
+    // local "Swap paddles" toggle in RadioSettings. HaliKey-scoped only — the
+    // KPOD+ has its own onboard keyer and continues to mirror the K4 directly.
+    void applyPaddleReversal();
+
     RadioState *m_radioState;
     ConnectionController *m_connection;
     IambicKeyer *m_keyer;          // owned by HardwareController

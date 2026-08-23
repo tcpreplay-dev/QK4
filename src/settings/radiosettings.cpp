@@ -364,6 +364,18 @@ void RadioSettings::setHalikeyDeviceType(int type) {
     }
 }
 
+bool RadioSettings::halikeyPaddleSwapped() const {
+    return m_halikeyPaddleSwapped;
+}
+
+void RadioSettings::setHalikeyPaddleSwapped(bool swapped) {
+    if (m_halikeyPaddleSwapped != swapped) {
+        m_halikeyPaddleSwapped = swapped;
+        save();
+        emit halikeyPaddleSwappedChanged(swapped);
+    }
+}
+
 int RadioSettings::sidetoneVolume() const {
     return m_sidetoneVolume;
 }
@@ -567,6 +579,7 @@ void RadioSettings::load() {
     m_halikeyPortName = m_settings.value("halikey/portName", "").toString();
     m_halikeyEnabled = m_settings.value("halikey/enabled", false).toBool();
     m_halikeyDeviceType = m_settings.value("halikey/deviceType", 0).toInt();
+    m_halikeyPaddleSwapped = m_settings.value("halikey/paddleSwapped", false).toBool();
     m_sidetoneVolume = m_settings.value("halikey/sidetoneVolume", 30).toInt();
 
     // KPOD+ keyer settings
@@ -665,6 +678,7 @@ void RadioSettings::save() {
     m_settings.setValue("halikey/portName", m_halikeyPortName);
     m_settings.setValue("halikey/enabled", m_halikeyEnabled);
     m_settings.setValue("halikey/deviceType", m_halikeyDeviceType);
+    m_settings.setValue("halikey/paddleSwapped", m_halikeyPaddleSwapped);
     m_settings.setValue("halikey/sidetoneVolume", m_sidetoneVolume);
 
     // KPOD+ keyer settings
