@@ -2,6 +2,7 @@
 #define CWCONTROLLER_H
 
 #include <QObject>
+#include <QTimer>
 #include <atomic>
 
 class RadioState;
@@ -206,6 +207,25 @@ private:
     // KPOD+ has its own onboard keyer and continues to mirror the K4 directly.
     void applyPaddleReversal();
 
+    // Straight Key / Bug mode: bypasses IambicKeyer entirely. Recomputes the
+    // combined raw contact state (m_skDitDown OR m_skDahDown — a plain straight
+    // key wires to DIT only; a semi-automatic bug uses both: mechanical dits on
+    // DIT, manual dahs on DAH) and, on a real transition, sends TX;/RX; directly
+    // and starts/stops the sidetone hold. CAS-guarded so a same-direction repeat
+    // (e.g. dit fires again while dah is already holding the key down) never
+    // re-sends TX;/RX;. Called from the HaliKey worker thread — see
+    // "Threading invariants" above; sendCAT and the sidetone invokeMethod calls
+    // are safe from any thread (TcpClient::sendCAT self-marshals; SidetoneGenerator
+    // methods are Q_INVOKABLE).
+    //
+    // Verified against real K4 hardware: TX;/RX; toggles TQ0/TQ1 cleanly with no
+    // observed side effects at QRP power into a dummy load (2026-08-22).
+    void handleStraightKeyEdge();
+
+    // Forces the key up if currently held — used on HaliKey disconnect, radio
+    // disconnect, and the max-hold watchdog. Safe to call when not keyed (no-op).
+    void forceStraightKeyRelease();
+
     RadioState *m_radioState;
     ConnectionController *m_connection;
     IambicKeyer *m_keyer;          // owned by HardwareController
@@ -222,6 +242,28 @@ private:
 
     enum V14PttDest { V14PttNone = 0, V14PttDitPaddle = 1, V14PttPtt = 2 };
     std::atomic<int> m_v14PttDestination{V14PttNone};
+
+    // Straight Key / Bug mode (RadioSettings-backed, HaliKey-scoped).
+    // Main-thread release store (ctor + halikeyStraightKeyModeChanged), HaliKey-worker
+    // acquire load in the ditStateChanged/dahStateChanged handlers — same pattern as
+    // m_cachedIsV14 above.
+    std::atomic<bool> m_straightKeyMode{false};
+
+    // Per-line raw contact state while straight-key mode is active; OR'd together in
+    // handleStraightKeyEdge() so both a plain straight key (DIT only) and a bug
+    // (mechanical dits on DIT, manual dahs on DAH) key the transmitter correctly.
+    std::atomic<bool> m_skDitDown{false};
+    std::atomic<bool> m_skDahDown{false};
+    // The combined state actually sent to the K4 — CAS-guarded in handleStraightKeyEdge()
+    // so a same-direction repeat never re-sends TX;/RX;.
+    std::atomic<bool> m_skKeyed{false};
+
+    // Defense-in-depth against a wedged straight key (stuck contact, dropped edge):
+    // force-releases after kStraightKeyMaxHoldMs of continuous keydown. Lives on the main
+    // thread (CwController's own thread); started/stopped via QMetaObject::invokeMethod
+    // from handleStraightKeyEdge() since that runs on the HaliKey worker thread.
+    static constexpr int kStraightKeyMaxHoldMs = 3 * 60 * 1000; // 3 minutes
+    QTimer *m_straightKeyWatchdog = nullptr;
 };
 
 #endif // CWCONTROLLER_H

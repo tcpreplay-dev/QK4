@@ -68,6 +68,24 @@ CwKeyerPage::CwKeyerPage(HalikeyDevice *halikeyDevice, QWidget *parent)
             [](bool checked) { RadioSettings::instance()->setHalikeyPaddleSwapped(checked); });
     layout->addWidget(m_swapPaddlesCheck);
 
+    // Straight Key / Bug — bypasses the iambic keyer entirely. Raw contact closures on
+    // either paddle line drive TX;/RX; directly, matching how a hand key or semi-automatic
+    // bug actually keys a transmitter (arbitrary-duration keydown, no element shaping).
+    m_straightKeyCheck = new QCheckBox("Straight Key / Bug (bypass iambic keyer)", this);
+    m_straightKeyCheck->setStyleSheet(K4Styles::Dialog::checkBox());
+    m_straightKeyCheck->setChecked(RadioSettings::instance()->halikeyStraightKeyMode());
+    connect(m_straightKeyCheck, &QCheckBox::toggled, this,
+            [](bool checked) { RadioSettings::instance()->setHalikeyStraightKeyMode(checked); });
+    layout->addWidget(m_straightKeyCheck);
+
+    auto *straightKeyHelpLabel =
+        new QLabel("A plain straight key wires to the DIT line only. A semi-automatic bug uses both — "
+                   "mechanical dits on DIT, manual dahs on DAH.",
+                   this);
+    straightKeyHelpLabel->setWordWrap(true);
+    straightKeyHelpLabel->setStyleSheet(K4Styles::Dialog::helpText());
+    layout->addWidget(straightKeyHelpLabel);
+
     // Separator line
     auto *line = new QFrame(this);
     line->setFrameShape(QFrame::HLine);

@@ -6,6 +6,7 @@
 #include <QIODevice>
 #include <QByteArray>
 #include <QMediaDevices>
+#include <QTimer>
 #include <QtMath>
 #include <atomic>
 
@@ -36,11 +37,22 @@ public:
     Q_INVOKABLE void playSingleDit();
     Q_INVOKABLE void playSingleDah();
 
+    // Continuous tone for as long as a straight key / bug is held down (CwController's
+    // straight-key path). Unlike playSingleDit/Dah, which write one fixed-length block per
+    // element, this feeds short chunks on a repeating timer so the tone can run for an
+    // arbitrary, operator-controlled duration. stopHold() cuts the feed and lets the tone
+    // ring out over one short falling-envelope chunk — a small click on release is expected
+    // (matches the abrupt edge of a real hand key) and is cosmetic only; it never affects the
+    // actual TX;/RX; keying sent to the K4.
+    Q_INVOKABLE void startHold();
+    Q_INVOKABLE void stopHold();
+
 signals:
 
 private:
     void initAudio();
     void playElement(int durationMs);
+    void writeHoldChunk(bool applyRise, bool applyFall);
     int ditDurationMs() const;
     int dahDurationMs() const;
     // WHY: when the user leaves the speaker on "System Default" (empty device id),
@@ -58,6 +70,13 @@ private:
     std::atomic<float> m_volume{0.3f};
     std::atomic<int> m_keyerWpm{20};
     double m_phase = 0.0;
+
+    // Straight-key/bug hold state. Lazily created on first startHold() call, which always
+    // runs on the sidetone thread (Q_INVOKABLE, dispatched via QueuedConnection) — safe to
+    // `new QTimer(this)` there. Plain bool, not atomic: start/stopHold only ever run
+    // serialized on this thread via the queued-invoke pattern documented on the class.
+    QTimer *m_holdTimer = nullptr;
+    bool m_holding = false;
 
     // Pre-allocated PCM scratch buffer. Worst case is 5 WPM dah (720 ms tone +
     // 240 ms inter-element space) at 48 kHz × 2 bytes = ~92 kB. Sized to

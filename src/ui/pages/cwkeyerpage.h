@@ -36,6 +36,7 @@ private:
     QComboBox *m_cwKeyerDeviceTypeCombo = nullptr;
     QLabel *m_cwKeyerDescLabel = nullptr;
     QCheckBox *m_swapPaddlesCheck = nullptr;
+    QCheckBox *m_straightKeyCheck = nullptr;
     QComboBox *m_cwKeyerPortCombo = nullptr;
     QPushButton *m_cwKeyerRefreshBtn = nullptr;
     QPushButton *m_cwKeyerConnectBtn = nullptr;

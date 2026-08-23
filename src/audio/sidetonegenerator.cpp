@@ -197,3 +197,74 @@ void SidetoneGenerator::playElement(int durationMs) {
 
     m_pushDevice->write(m_elementBuffer);
 }
+
+void SidetoneGenerator::startHold() {
+    if (m_holding)
+        return;
+    if (!m_audioSink)
+        return;
+    if (!m_pushDevice) {
+        m_pushDevice = m_audioSink->start();
+        if (!m_pushDevice) {
+            qCWarning(qk4Audio) << "SidetoneGenerator: Cannot start hold - no audio device";
+            return;
+        }
+    }
+
+    if (!m_holdTimer) {
+        m_holdTimer = new QTimer(this);
+        connect(m_holdTimer, &QTimer::timeout, this, [this]() { writeHoldChunk(false, false); });
+    }
+
+    m_holding = true;
+    writeHoldChunk(true, false); // rising envelope on the first chunk only
+    m_holdTimer->start(30);
+}
+
+void SidetoneGenerator::stopHold() {
+    if (!m_holding)
+        return;
+    m_holding = false;
+    if (m_holdTimer)
+        m_holdTimer->stop();
+    writeHoldChunk(false, true); // falling envelope + tail on the last chunk
+}
+
+void SidetoneGenerator::writeHoldChunk(bool applyRise, bool applyFall) {
+    if (!m_pushDevice)
+        return;
+
+    const int sampleRate = 48000;
+    const int chunkMs = 30;
+    const int chunkSamples = (sampleRate * chunkMs) / 1000;
+    const int rampSamples = (sampleRate * 3) / 1000; // 3ms rise/fall, matches playElement
+
+    const int bufferBytes = chunkSamples * static_cast<int>(sizeof(qint16));
+    if (m_elementBuffer.capacity() < bufferBytes)
+        m_elementBuffer.reserve(bufferBytes);
+    m_elementBuffer.resize(bufferBytes);
+    qint16 *samples = reinterpret_cast<qint16 *>(m_elementBuffer.data());
+
+    int freq = m_frequency.load(std::memory_order_relaxed);
+    float vol = m_volume.load(std::memory_order_relaxed);
+    double phaseIncrement = 2.0 * M_PI * freq / sampleRate;
+
+    for (int i = 0; i < chunkSamples; ++i) {
+        float envelope = 1.0f;
+        if (applyRise && i < rampSamples) {
+            envelope = 0.5f * (1.0f - qCos(M_PI * i / rampSamples));
+        } else if (applyFall && i >= chunkSamples - rampSamples) {
+            int fallIndex = i - (chunkSamples - rampSamples);
+            envelope = 0.5f * (1.0f + qCos(M_PI * fallIndex / rampSamples));
+        }
+
+        double sample = qSin(m_phase) * vol * envelope * 32767.0;
+        samples[i] = static_cast<qint16>(sample);
+        m_phase += phaseIncrement;
+        if (m_phase >= 2.0 * M_PI) {
+            m_phase -= 2.0 * M_PI;
+        }
+    }
+
+    m_pushDevice->write(m_elementBuffer);
+}
