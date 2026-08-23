@@ -114,6 +114,13 @@ CwController::CwController(RadioState *radioState, ConnectionController *connect
     // The HaliKey worker thread reads with acquire ordering, paired with the
     // release store here.
     m_cachedMode.store(static_cast<int>(m_radioState->mode()), std::memory_order_release);
+
+    // Same cache pattern for isTransmitting() — see m_cachedIsTransmitting's doc comment.
+    m_cachedIsTransmitting.store(m_radioState->isTransmitting(), std::memory_order_release);
+    connect(m_radioState, &RadioState::transmitStateChanged, this, [this](bool transmitting) {
+        m_cachedIsTransmitting.store(transmitting, std::memory_order_release);
+    });
+
     connect(m_radioState, &RadioState::modeChanged, this, [this](RadioState::Mode mode) {
         m_cachedMode.store(static_cast<int>(mode), std::memory_order_release);
         // V1.4 mode-transition cleanup: if a paddle/PTT was rising-edge-captured before
@@ -314,14 +321,27 @@ CwController::CwController(RadioState *radioState, ConnectionController *connect
     // Enable keyer when radio connects, disable on disconnect
     connect(m_connection, &ConnectionController::radioReady, this, [this]() {
         QMetaObject::invokeMethod(m_keyer, "setEnabled", Qt::QueuedConnection, Q_ARG(bool, true));
+        // Connect-time correction for straight-key mode: nothing tracks whether a prior
+        // session left the SW16; TUNE toggle on. isTransmitting() is real radio state as
+        // of this fresh connection — if it reads true while straight-key mode is enabled,
+        // correct it once rather than leaving an unattended carrier from before this
+        // connection existed. isTransmitting() is safe to read directly here since this
+        // runs on the main thread, same as m_radioState itself.
+        if (m_straightKeyMode.load(std::memory_order_acquire) && m_radioState->isTransmitting())
+            m_connection->sendCAT(QStringLiteral("SW16;"));
     });
     connect(m_connection, &ConnectionController::connectionStateChanged, this,
             [this](TcpClient::ConnectionState state) {
                 if (state == TcpClient::Disconnected) {
                     QMetaObject::invokeMethod(m_keyer, "setEnabled", Qt::QueuedConnection, Q_ARG(bool, false));
                     // Socket's already down — just reset local state, nothing to send.
+                    // m_skToggledTune resets too: whatever it was tracking is moot once
+                    // the connection carrying that TUNE toggle is gone, and radioReady's
+                    // correction above is what actually verifies/clears real radio state
+                    // on the next connect.
                     m_skKeyDown.store(false, std::memory_order_release);
                     m_skKeyed.store(false, std::memory_order_release);
+                    m_skToggledTune.store(false, std::memory_order_release);
                     m_straightKeyWatchdog->stop();
                     QMetaObject::invokeMethod(m_sidetone, "stopHold", Qt::QueuedConnection);
                 }
@@ -386,13 +406,20 @@ void CwController::handleStraightKeyEdge() {
     if (!m_skKeyed.compare_exchange_strong(expected, down, std::memory_order_acq_rel))
         return; // already in the requested state — no edge to act on
 
+    // KNOWN BUG — see handleStraightKeyEdge()'s header doc comment. Gating each send on
+    // m_cachedIsTransmitting can silently lock the transmitter keyed if that cache ever
+    // reads stale. Reinstated deliberately to debug from the known-good-then-broke state.
     if (down) {
-        m_connection->sendCAT(QStringLiteral("TX;"));
+        if (!m_cachedIsTransmitting.load(std::memory_order_acquire)) {
+            m_connection->sendCAT(QStringLiteral("SW16;"));
+            m_skToggledTune.store(true, std::memory_order_release);
+        }
         QMetaObject::invokeMethod(m_sidetone, "startHold", Qt::QueuedConnection);
         QMetaObject::invokeMethod(this, [this]() { m_straightKeyWatchdog->start(kStraightKeyMaxHoldMs); },
                                   Qt::QueuedConnection);
     } else {
-        m_connection->sendCAT(QStringLiteral("RX;"));
+        if (m_skToggledTune.exchange(false, std::memory_order_acq_rel))
+            m_connection->sendCAT(QStringLiteral("SW16;"));
         QMetaObject::invokeMethod(m_sidetone, "stopHold", Qt::QueuedConnection);
         QMetaObject::invokeMethod(this, [this]() { m_straightKeyWatchdog->stop(); }, Qt::QueuedConnection);
     }
@@ -402,7 +429,8 @@ void CwController::forceStraightKeyRelease() {
     m_skKeyDown.store(false, std::memory_order_release);
     if (!m_skKeyed.exchange(false, std::memory_order_acq_rel))
         return; // wasn't keyed — nothing to release
-    m_connection->sendCAT(QStringLiteral("RX;"));
+    if (m_skToggledTune.exchange(false, std::memory_order_acq_rel))
+        m_connection->sendCAT(QStringLiteral("SW16;"));
     QMetaObject::invokeMethod(m_sidetone, "stopHold", Qt::QueuedConnection);
     m_straightKeyWatchdog->stop();
 }

@@ -211,21 +211,44 @@ private:
     // (m_skKeyDown) — DIT is always ignored (see dahStateChanged/pttStateChanged in the
     // .cpp for why: on V1.4, DIT is indistinguishable from the foot pedal on the wire, so
     // routing it into straight-key mode would let a 2-conductor key's floating DIT line
-    // leak spurious keying). On a real transition, sends TX;/RX; directly and starts/stops
-    // the sidetone hold. CAS-guarded so a same-direction repeat never re-sends TX;/RX;.
-    // Called from the HaliKey worker thread — see "Threading invariants" above; sendCAT
-    // and the sidetone invokeMethod calls are safe from any thread (TcpClient::sendCAT
-    // self-marshals; SidetoneGenerator methods are Q_INVOKABLE).
+    // leak spurious keying).
     //
-    // NOTE (2026-08-22): TX;/RX; verified against real hardware to toggle TQ0/TQ1
-    // cleanly on the legacy CAT port (9200, MD2=CW), but on the K4/0 remote protocol
-    // this app actually uses (9204/9205, MD3=CW) the radio accepts TX; without ever
-    // producing a carrier — confirmed live (S-meter kept updating, TQ stayed 0 the
-    // whole hold). The iambic keyer path never sends TX; at all; KZ elements are
-    // themselves the keying mechanism on this protocol surface, with no separate PTT
-    // step. A real remote key-down primitive for CW may not exist on this port — see
-    // memory/kz-protocol.md (not in this repo) or Elecraft's K4 programmer's
-    // reference before building a replacement mechanism.
+    // KEYING MECHANISM (2026-08-22): bare TX;/RX; is accepted by the radio but produces no
+    // carrier on the K4/0 remote protocol this app uses (9204/9205, MD3=CW) — confirmed
+    // live (S-meter kept updating, TQ stayed 0 the whole hold). The iambic keyer path
+    // never sends TX; either; KZ elements are the keying mechanism there, with no separate
+    // PTT step. What does work: SW16; — the front-panel TUNE button, simulated over CAT —
+    // toggles a real carrier (confirmed via TQ0/TQ1 and audible on the radio) and, unlike
+    // TX;, the radio pushes an unsolicited TX;/RX; back when it engages/disengages, same
+    // as manual PTT. Verified clean down to a 50ms hold (well under a 25 WPM dit) with no
+    // ATU engagement — TUNE and ATU TUNE are separate buttons/commands (SW16; vs SW40;),
+    // confirmed both from the K4's own RDY; config dump and from listening to the radio.
+    //
+    // SW16; is a toggle, not press/release, so every send here is gated on
+    // m_radioState->isTransmitting() (itself driven by those TX;/RX; pushes) rather than
+    // blindly toggled — on a real transition it sends SW16; only when that reads the
+    // opposite of what we're about to set, so a duplicate edge is a no-op. m_skToggledTune
+    // tracks whether *this* code is the one holding the toggle, so a straight-key release
+    // never stops a carrier the operator started from the real TUNE button.
+    //
+    // KNOWN BUG (2026-08-22, unfixed — reinstated deliberately): this gating caused a
+    // silent, permanent lockout on real hardware at ~35 WPM: once m_cachedIsTransmitting
+    // read stale ("on") for any reason, every later down-edge saw "already on" and skipped
+    // sending, so m_skToggledTune never got set, so every later up-edge also skipped —
+    // leaving the transmitter keyed continuously through the rest of a fast-keying run
+    // while local sidetone kept playing normally the whole time. A later attempt to fix
+    // this by sending SW16; unconditionally (no gating at all) traded that bug for a
+    // different one — parity inversion at ~50 WPM, apparently the radio itself dropping a
+    // toggle under sustained rapid alternation — plus an unexplained low-speed lockup.
+    // Reinstated to this gated version at the user's request to debug a real fix from a
+    // known baseline that "sounded right" (their words: "just like keying with the bug
+    // put in the back of the radio") right up until it broke. TX WILL HANG under this
+    // known bug — do not leave straight-key mode enabled unattended; watch the radio's own
+    // TX indicator, not just the sidetone, during any test.
+    //
+    // Also starts/stops the sidetone hold. Called from the HaliKey worker thread — see
+    // "Threading invariants" above; sendCAT and the sidetone invokeMethod calls are safe
+    // from any thread (TcpClient::sendCAT self-marshals; SidetoneGenerator is Q_INVOKABLE).
     void handleStraightKeyEdge();
 
     // Forces the key up if currently held — used on HaliKey disconnect, radio
@@ -241,6 +264,14 @@ private:
 
     // See "State moved from HardwareController" above for invariants.
     std::atomic<int> m_cachedMode{0};
+
+    // Thread-safe mirror of m_radioState->isTransmitting() (a plain bool, main-thread
+    // only) — same store/load pattern as m_cachedMode. Updated from
+    // RadioState::transmitStateChanged, which fires on incoming TX;/RX; pushes (both
+    // manual PTT and the SW16; TUNE toggle used by straight-key mode). Read on the
+    // HaliKey worker thread to gate handleStraightKeyEdge()'s SW16; sends against actual
+    // radio state instead of blindly toggling.
+    std::atomic<bool> m_cachedIsTransmitting{false};
 
     // true = V1.4 serial (deviceType 0), false = MIDI (deviceType 1).
     // Main-thread release store, HaliKey-worker acquire load — see doc block.
@@ -259,14 +290,21 @@ private:
     // always ignored (see handleStraightKeyEdge's doc comment above).
     std::atomic<bool> m_skKeyDown{false};
     // The state actually sent to the K4 — CAS-guarded in handleStraightKeyEdge() so a
-    // repeat of the same value never re-sends TX;/RX;.
+    // repeat of the same value never re-sends SW16;.
     std::atomic<bool> m_skKeyed{false};
+    // True while straight-key mode is the one holding the SW16; TUNE toggle on — lets
+    // handleStraightKeyEdge()/forceStraightKeyRelease() tell "I'm keyed" apart from "the
+    // operator pressed the real TUNE button", so a straight-key release never stops a
+    // carrier it didn't start.
+    std::atomic<bool> m_skToggledTune{false};
 
     // Defense-in-depth against a wedged straight key (stuck contact, dropped edge):
-    // force-releases after kStraightKeyMaxHoldMs of continuous keydown. Lives on the main
-    // thread (CwController's own thread); started/stopped via QMetaObject::invokeMethod
-    // from handleStraightKeyEdge() since that runs on the HaliKey worker thread.
-    static constexpr int kStraightKeyMaxHoldMs = 3 * 60 * 1000; // 3 minutes
+    // force-releases after kStraightKeyMaxHoldMs of continuous keydown. Short — this now
+    // holds a real carrier via SW16;, not a no-op TX;, so an unattended stuck key is an
+    // actual unattended transmission. Lives on the main thread (CwController's own
+    // thread); started/stopped via QMetaObject::invokeMethod from handleStraightKeyEdge()
+    // since that runs on the HaliKey worker thread.
+    static constexpr int kStraightKeyMaxHoldMs = 5 * 1000; // 5 seconds
     QTimer *m_straightKeyWatchdog = nullptr;
 };
 
