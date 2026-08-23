@@ -68,13 +68,8 @@ CwKeyerPage::CwKeyerPage(HalikeyDevice *halikeyDevice, QWidget *parent)
             [](bool checked) { RadioSettings::instance()->setHalikeyPaddleSwapped(checked); });
     layout->addWidget(m_swapPaddlesCheck);
 
-    // Straight Key / Bug — bypasses the iambic keyer entirely. The DAH line drives the
-    // radio's TUNE toggle (SW16;) directly (arbitrary-duration keydown, no element
-    // shaping) — see CwController::handleStraightKeyEdge() for why TUNE rather than TX;.
-    // DIT is always ignored, even when this mode is on — the HaliKey V1.4's dit lever and
-    // its foot-pedal input are electrically indistinguishable, so treating DIT as a key
-    // input would also fire on a pedal press, and a mono-plug key would short both. Wire
-    // the key to DAH.
+    // DAH drives TU1;/TU0; directly; DIT is always ignored (V1.4 can't distinguish it
+    // from the foot pedal). See CwController::handleStraightKeyEdge().
     m_straightKeyCheck = new QCheckBox("Straight Key / Bug (bypass iambic keyer)", this);
     m_straightKeyCheck->setStyleSheet(K4Styles::Dialog::checkBox());
     m_straightKeyCheck->setChecked(RadioSettings::instance()->halikeyStraightKeyMode());
