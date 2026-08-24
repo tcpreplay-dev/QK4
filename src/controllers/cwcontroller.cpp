@@ -48,9 +48,13 @@ CwController::CwController(RadioState *radioState, ConnectionController *connect
         // members would otherwise introduce a silent race with no call-site warning.
         QMetaObject::invokeMethod(m_sidetone, "setKeyerSpeed", Qt::QueuedConnection, Q_ARG(int, wpm));
         QMetaObject::invokeMethod(m_keyer, "setSpeed", Qt::QueuedConnection, Q_ARG(int, wpm));
-        // Sync element length with K4 server
-        int ditMs = 1200 / wpm;
-        m_connection->sendCAT(QString("KZL%1;").arg(ditMs, 2, 10, QChar('0')));
+        // KZL is the remote key-down initial delay (K4 reference Rev D5), not element
+        // length as the original comment here assumed. Straight-key mode derives it from
+        // the operator's speed bounds and owns it while active — don't stomp that.
+        if (!m_straightKeyMode.load(std::memory_order_acquire)) {
+            int ditMs = 1200 / wpm;
+            m_connection->sendCAT(QString("KZL%1;").arg(ditMs, 2, 10, QChar('0')));
+        }
         // K4 is the source of truth — mirror the speed onto the KPOD+ keyer.
         if (m_kpodPlus->isPolling())
             m_kpodPlus->setKeyerSpeed(wpm);
@@ -72,12 +76,19 @@ CwController::CwController(RadioState *radioState, ConnectionController *connect
     connect(RadioSettings::instance(), &RadioSettings::halikeyPaddleSwappedChanged, this,
             [this](bool) { applyPaddleReversal(); });
 
+    connect(RadioSettings::instance(), &RadioSettings::straightKeyTimingChanged, this, [this]() {
+        if (m_straightKeyMode.load(std::memory_order_acquire))
+            applyStraightKeyPreRoll();
+    });
+
     // Straight Key / Bug mode (RadioSettings, HaliKey-scoped). Main-thread release
     // store; the ditStateChanged/dahStateChanged handlers below read it with acquire
     // ordering on the HaliKey worker thread — same pattern as m_cachedIsV14.
     m_straightKeyMode.store(RadioSettings::instance()->halikeyStraightKeyMode(), std::memory_order_release);
     connect(RadioSettings::instance(), &RadioSettings::halikeyStraightKeyModeChanged, this, [this](bool enabled) {
         m_straightKeyMode.store(enabled, std::memory_order_release);
+        if (enabled)
+            applyStraightKeyPreRoll();
         if (!enabled)
             forceStraightKeyRelease(); // mode off mid-press: drop the half-finished element
 
@@ -313,6 +324,8 @@ CwController::CwController(RadioState *radioState, ConnectionController *connect
     // Enable keyer when radio connects, disable on disconnect
     connect(m_connection, &ConnectionController::radioReady, this, [this]() {
         QMetaObject::invokeMethod(m_keyer, "setEnabled", Qt::QueuedConnection, Q_ARG(bool, true));
+        if (m_straightKeyMode.load(std::memory_order_acquire))
+            applyStraightKeyPreRoll();
     });
     connect(m_connection, &ConnectionController::connectionStateChanged, this,
             [this](TcpClient::ConnectionState state) {
@@ -378,6 +391,21 @@ void CwController::applyPaddleReversal() {
                               Q_ARG(bool, radioReversed != localSwap));
 }
 
+int CwController::straightKeyPreRollMs() const {
+    auto *rs = RadioSettings::instance();
+    if (!rs->straightKeyBufferEnabled())
+        return 0;
+    const double dit = 1200.0 / qBound(5, rs->straightKeyMinWpm(), 35);
+    const double l = dit * (1.0 + rs->straightKeyDahDitRatio()) * 1.3;
+    return qBound(0, static_cast<int>(l + 0.5), kMaxPreRollMs);
+}
+
+void CwController::applyStraightKeyPreRoll() {
+    m_skPreRollMs.store(straightKeyPreRollMs(), std::memory_order_release);
+    m_connection->sendCAT(
+        QStringLiteral("KZL%1;").arg(m_skPreRollMs.load(std::memory_order_acquire), 4, 10, QChar('0')));
+}
+
 void CwController::handleStraightKeyEdge() {
     const bool down = m_skKeyDown.load(std::memory_order_acquire);
     bool expected = !down;
@@ -415,7 +443,11 @@ void CwController::handleStraightKeyEdge() {
     const int effGap = static_cast<int>(qBound<qint64>(0, gap - idle, qint64(kMaxFieldMs)));
     const int dur = static_cast<int>(qBound<qint64>(qint64(kMinElementMs), held, qint64(kMaxFieldMs)));
 
-    m_k4BusyUntilMs.store(qMax(now, busyUntil) + effGap + dur, std::memory_order_release);
+    // The radio's KZL pre-roll lands only on a key-down after idle, so it extends how long
+    // the radio stays busy at the start of a burst. Counting it here is what keeps idle==0
+    // mid-character, which in turn makes effGap resolve to the operator's true gap.
+    const qint64 preRoll = (idle > 0) ? m_skPreRollMs.load(std::memory_order_acquire) : 0;
+    m_k4BusyUntilMs.store(qMax(now, busyUntil) + preRoll + effGap + dur, std::memory_order_release);
     m_connection->sendCAT(
         QStringLiteral("KZD%1U%2;").arg(effGap, 4, 10, QChar('0')).arg(dur, 4, 10, QChar('0')));
 }

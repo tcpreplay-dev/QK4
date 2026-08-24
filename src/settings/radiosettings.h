@@ -118,6 +118,19 @@ public:
     void setHalikeyPaddleSwapped(bool swapped);
     bool halikeyStraightKeyMode() const;
     void setHalikeyStraightKeyMode(bool enabled);
+
+    // Straight-key timing buffer. The radio applies a key-down pre-roll (KZL) so its
+    // element queue never drains mid-character; without it every dah following a dit
+    // renders as a letter break. Expressed as speed bounds rather than milliseconds —
+    // see CwController::straightKeyPreRollMs().
+    bool straightKeyBufferEnabled() const;
+    void setStraightKeyBufferEnabled(bool enabled);
+    int straightKeyMinWpm() const;
+    void setStraightKeyMinWpm(int wpm); // 5-35, slowest element the operator sends
+    int straightKeyMaxWpm() const;
+    void setStraightKeyMaxWpm(int wpm); // 15-80, drives contact-bounce rejection
+    double straightKeyDahDitRatio() const;
+    void setStraightKeyDahDitRatio(double ratio); // 2.5-5.0, operator's own sending style
     int sidetoneVolume() const;
     void setSidetoneVolume(int value); // 0-100, default 30
 
@@ -183,6 +196,7 @@ signals:
     void halikeyDeviceTypeChanged(int type);
     void halikeyPaddleSwappedChanged(bool swapped);
     void halikeyStraightKeyModeChanged(bool enabled);
+    void straightKeyTimingChanged();
     void sidetoneVolumeChanged(int value);
     void rxEqPresetsChanged();
     void txEqPresetsChanged();
@@ -217,6 +231,10 @@ private:
     int m_halikeyDeviceType = 0; // 0=V14, 1=MiDi
     bool m_halikeyPaddleSwapped = false;
     bool m_halikeyStraightKeyMode = false;
+    bool m_straightKeyBufferEnabled = false;
+    int m_straightKeyMinWpm = 15;
+    int m_straightKeyMaxWpm = 35;
+    double m_straightKeyDahDitRatio = 3.0;
     int m_sidetoneVolume = 30;   // Default 30%
 
     // Macro settings

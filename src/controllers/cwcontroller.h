@@ -228,6 +228,17 @@ private:
     // subtracted or a long pause gets counted twice.
     void handleStraightKeyEdge();
 
+    // Pre-roll in ms, derived from the operator's declared speed bounds. The radio must
+    // still be playing the previous element when the next command arrives, or its silence
+    // becomes the gap — so this must exceed one gap plus the longest element. Measured on
+    // hardware: a 500ms dah with 60ms gaps needs >560ms; 600 sufficed, 320 did not. The
+    // 1.3 factor is that margin. Zero when the buffer is disabled. KZL caps at 1000ms, so
+    // below roughly 6 WPM at 3:1 the requested value is unreachable.
+    int straightKeyPreRollMs() const;
+
+    // Pushes straightKeyPreRollMs() to the radio as KZLnnnn;.
+    void applyStraightKeyPreRoll();
+
     // Drops straight-key state and silences the sidetone. No radio-side un-key needed.
     void forceStraightKeyRelease();
 
@@ -270,6 +281,8 @@ private:
     std::atomic<qint64> m_skLastUpMs{0};
     // When the K4 finishes playing everything already sent — see handleStraightKeyEdge().
     std::atomic<qint64> m_k4BusyUntilMs{0};
+    // Mirror of the KZL value last sent, read on the HaliKey worker thread.
+    std::atomic<int> m_skPreRollMs{0};
 
     // Stuck-contact cleanup: an element is only emitted on release, so a wedged contact
     // means silence on the air and an endless sidetone. Bounds both.
@@ -278,6 +291,8 @@ private:
     static constexpr int kMinElementMs = 10;
     // Widest value a 4-digit D/U field holds.
     static constexpr int kMaxFieldMs = 9999;
+    // KZL's documented ceiling (K4 reference Rev D5).
+    static constexpr int kMaxPreRollMs = 1000;
     QTimer *m_straightKeyWatchdog = nullptr;
 };
 
