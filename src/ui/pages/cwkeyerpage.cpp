@@ -68,8 +68,8 @@ CwKeyerPage::CwKeyerPage(HalikeyDevice *halikeyDevice, QWidget *parent)
             [](bool checked) { RadioSettings::instance()->setHalikeyPaddleSwapped(checked); });
     layout->addWidget(m_swapPaddlesCheck);
 
-    // DAH drives TU1;/TU0; directly; DIT is always ignored (V1.4 can't distinguish it
-    // from the foot pedal). See CwController::handleStraightKeyEdge().
+    // DAH drives one KZD<gap>U<duration>; per element; DIT is always ignored (V1.4 can't
+    // distinguish it from the foot pedal). See CwController::handleStraightKeyEdge().
     m_straightKeyCheck = new QCheckBox("Straight Key / Bug (bypass iambic keyer)", this);
     m_straightKeyCheck->setStyleSheet(K4Styles::Dialog::checkBox());
     m_straightKeyCheck->setChecked(RadioSettings::instance()->halikeyStraightKeyMode());
@@ -78,9 +78,9 @@ CwKeyerPage::CwKeyerPage(HalikeyDevice *halikeyDevice, QWidget *parent)
     layout->addWidget(m_straightKeyCheck);
 
     auto *straightKeyHelpLabel =
-        new QLabel("Wire your key to the DAH line (DIT is always ignored). Keys the "
-                   "transmitter via the radio's TUNE function, since the K4's remote "
-                   "protocol has no direct CW key-down command.",
+        new QLabel("Wire your key to the DAH line (DIT is always ignored). Elements are "
+                   "sent with your actual key timing, so weighting and spacing carry "
+                   "through; the radio lags by one element.",
                    this);
     straightKeyHelpLabel->setWordWrap(true);
     straightKeyHelpLabel->setStyleSheet(K4Styles::Dialog::helpText());

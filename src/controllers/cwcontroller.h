@@ -1,6 +1,7 @@
 #ifndef CWCONTROLLER_H
 #define CWCONTROLLER_H
 
+#include <QElapsedTimer>
 #include <QObject>
 #include <QTimer>
 #include <atomic>
@@ -65,6 +66,8 @@ class KpodPlusDevice;
 //   IambicKeyer::elementStarted          | sidetone dit/dah   | keyer -> sidetone thread  | AutoConnection (Queued)
 //   HalikeyDevice::ditStateChanged       | keyer setDitPaddle | HaliKey worker -> main    | DirectConnection
 //   HalikeyDevice::dahStateChanged       | keyer setDahPaddle | HaliKey worker -> main    | DirectConnection
+//                                        | or, in straight-key|                           |
+//                                        | mode, KZD/U to K4  | HaliKey worker -> I/O     | sendCAT self-marshals
 //   HalikeyDevice::pttStateChanged       | V1.4 demux:        | HaliKey worker -> main    | DirectConnection
 //                                        |  CW -> dit paddle  |                           |
 //                                        |  voice -> ptt      |                           |
@@ -144,6 +147,9 @@ class KpodPlusDevice;
 //   6. The KPOD+ keyer-active gate must be set on deviceInfoReady (not
 //      deviceConnected) so the ~10-100 ms open window doesn't leak
 //      paddle events to the local sidetone path.
+//   8. Straight-key timing is measured on the HaliKey worker thread but
+//      carried inside the KZD/U command, so the send may marshal freely;
+//      only the edge timestamps must stay precise.
 //   7. Destructor MUST run disconnect(this) first per CONVENTIONS Rule 11
 //      to sever signal connections before any cross-thread devices tear
 //      down underneath the connections.
@@ -210,23 +216,17 @@ private:
     // Straight Key / Bug mode: bypasses IambicKeyer entirely. DAH is the sole input;
     // DIT is always ignored (on V1.4 it's indistinguishable from the foot pedal).
     //
-    // Emits KZ elements, the same mechanism the iambic keyer uses — the only thing on this
-    // protocol that actually keys CW. Every alternative was measured and rejected: TX;/RX;
-    // produces no carrier in CW on 9204/9205 and only PTT on 9200; TUNE (SW16; or
-    // TU1;/TU0;) commits to a ~400ms cycle per request on every port, so operator-paced
-    // keying comes out as sludge. Flooding TUNE does yield fast elements, but their length
-    // is set by the radio's parser rather than the operator, so it can't carry Morse.
+    // On each release, emits one KZD<gap>U<duration>; — 4-digit milliseconds, D being the
+    // key-up gap preceding the element and U how long the key was actually held. Timing is
+    // carried IN the command, so element fidelity does not depend on when the command
+    // reaches the wire; only the edge timestamps need to be precise. The K4 queues these
+    // (verified: two back-to-back commands play as two distinct elements), so no pacing or
+    // send-side throttling is required.
     //
-    // Element length is set per keystroke via KS (keyer speed) — KZL is inert for KZ
-    // elements here, verified on hardware. A dit is 1200/KS ms and a dah 3600/KS, so each
-    // release picks the element type whose range contains the held duration and solves for
-    // the speed, covering ~20-450ms continuously. Gaps become KZ ; letter spaces. Costs
-    // ~one element of RF latency since the duration isn't known until release; local
-    // sidetone is driven from the edge and stays real-time, so sending feel is unaffected.
+    // m_k4BusyUntilMs exists solely to keep D honest: the radio applies D as silence after
+    // whatever it is still playing, so any interval it has already spent idle has to be
+    // subtracted or a long pause gets counted twice.
     void handleStraightKeyEdge();
-
-    // Restores KS to the operator's keyer speed after straight-key mode borrowed it.
-    void restoreKeyerElementLength();
 
     // Drops straight-key state and silences the sidetone. No radio-side un-key needed.
     void forceStraightKeyRelease();
@@ -262,24 +262,22 @@ private:
     // repeat of the same value never re-emits an element.
     std::atomic<bool> m_skKeyed{false};
 
-    // Straight-key element classification (HaliKey worker thread only).
+    // Straight-key element timing. Free-running monotonic clock, same pattern as
+    // IambicKeyer::m_pressClock — started once in the ctor, read from the HaliKey worker
+    // thread, never reset (so it can't step under NTP mid-element).
+    QElapsedTimer m_skClock;
     std::atomic<qint64> m_skDownMs{0};
     std::atomic<qint64> m_skLastUpMs{0};
-    std::atomic<int> m_cachedWpm{20};
-    // Operator's real speed, captured when straight-key mode is enabled — the per-element
-    // KS writes make m_cachedWpm meaningless while the mode is active.
-    std::atomic<int> m_skNominalWpm{20};
+    // When the K4 finishes playing everything already sent — see handleStraightKeyEdge().
+    std::atomic<qint64> m_k4BusyUntilMs{0};
 
-    // Stuck-contact cleanup: silences the sidetone after a maximum hold. KZ elements are
-    // self-terminating so this cannot leave the transmitter keyed.
+    // Stuck-contact cleanup: an element is only emitted on release, so a wedged contact
+    // means silence on the air and an endless sidetone. Bounds both.
     static constexpr int kStraightKeyMaxHoldMs = 5 * 1000;
     // Shorter closures are contact bounce, not elements.
     static constexpr int kMinElementMs = 10;
-    // Usable keyer-speed range (the radio clamps below 8 WPM).
-    static constexpr int kMinKeyerWpm = 8;
-    static constexpr int kMaxKeyerWpm = 60;
-    // Longest dit available (1200/8); above this a dah at a slower speed is the better fit.
-    static constexpr int kDitDahBoundaryMs = 150;
+    // Widest value a 4-digit D/U field holds.
+    static constexpr int kMaxFieldMs = 9999;
     QTimer *m_straightKeyWatchdog = nullptr;
 };
 

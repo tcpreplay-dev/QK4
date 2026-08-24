@@ -9,8 +9,6 @@
 #include "network/tcpclient.h"
 #include "settings/radiosettings.h"
 
-#include <QDateTime>
-
 CwController::CwController(RadioState *radioState, ConnectionController *connection, IambicKeyer *keyer,
                            SidetoneGenerator *sidetone, HalikeyDevice *halikey, KpodPlusDevice *kpodPlus,
                            QObject *parent)
@@ -28,7 +26,7 @@ CwController::CwController(RadioState *radioState, ConnectionController *connect
         m_keyer, "setMode", Qt::QueuedConnection,
         Q_ARG(IambicKeyer::Mode, m_radioState->iambicMode() == 'B' ? IambicKeyer::IambicB : IambicKeyer::IambicA));
     applyPaddleReversal();
-    m_cachedWpm.store(initWpm, std::memory_order_release);
+    m_skClock.start();
 
     if (m_radioState->cwPitch() > 0) {
         QMetaObject::invokeMethod(m_sidetone, "setFrequency", Qt::QueuedConnection,
@@ -48,18 +46,11 @@ CwController::CwController(RadioState *radioState, ConnectionController *connect
         // but the matching invokeMethod for m_keyer on the next line establishes the
         // cross-thread pattern — future changes to setKeyerSpeed that touch non-atomic
         // members would otherwise introduce a silent race with no call-site warning.
-        // While straight-key mode owns KS, incoming speed echoes are our own per-element
-        // writes — don't mistake them for the operator changing speed.
-        if (!m_straightKeyMode.load(std::memory_order_acquire))
-            m_cachedWpm.store(wpm, std::memory_order_release);
         QMetaObject::invokeMethod(m_sidetone, "setKeyerSpeed", Qt::QueuedConnection, Q_ARG(int, wpm));
         QMetaObject::invokeMethod(m_keyer, "setSpeed", Qt::QueuedConnection, Q_ARG(int, wpm));
         // Sync element length with K4 server
-        // Straight-key mode churns KS per element; skip the derived KZL write mid-send.
-        if (!m_straightKeyMode.load(std::memory_order_acquire)) {
-            int ditMs = 1200 / wpm;
-            m_connection->sendCAT(QString("KZL%1;").arg(ditMs, 2, 10, QChar('0')));
-        }
+        int ditMs = 1200 / wpm;
+        m_connection->sendCAT(QString("KZL%1;").arg(ditMs, 2, 10, QChar('0')));
         // K4 is the source of truth — mirror the speed onto the KPOD+ keyer.
         if (m_kpodPlus->isPolling())
             m_kpodPlus->setKeyerSpeed(wpm);
@@ -86,14 +77,10 @@ CwController::CwController(RadioState *radioState, ConnectionController *connect
     // ordering on the HaliKey worker thread — same pattern as m_cachedIsV14.
     m_straightKeyMode.store(RadioSettings::instance()->halikeyStraightKeyMode(), std::memory_order_release);
     connect(RadioSettings::instance(), &RadioSettings::halikeyStraightKeyModeChanged, this, [this](bool enabled) {
-        if (enabled)
-            m_skNominalWpm.store(m_cachedWpm.load(std::memory_order_acquire), std::memory_order_release);
         m_straightKeyMode.store(enabled, std::memory_order_release);
-        if (!enabled) {
-            restoreKeyerElementLength();
-            // Mode turned off mid-press: drop the half-finished element cleanly.
-            forceStraightKeyRelease();
-        }
+        if (!enabled)
+            forceStraightKeyRelease(); // mode off mid-press: drop the half-finished element
+
     });
 
     // Max-hold watchdog: defense-in-depth against a wedged straight key (stuck
@@ -397,50 +384,49 @@ void CwController::handleStraightKeyEdge() {
     if (!m_skKeyed.compare_exchange_strong(expected, down, std::memory_order_acq_rel))
         return; // contact bounce / repeated same-direction edge
 
-    const qint64 now = QDateTime::currentMSecsSinceEpoch();
-    const int dit = 1200 / qBound(kMinKeyerWpm, m_skNominalWpm.load(std::memory_order_acquire), kMaxKeyerWpm);
+    const qint64 now = m_skClock.elapsed();
 
     if (down) {
-        // The gap that just ended belongs before the element it precedes.
-        const qint64 lastUp = m_skLastUpMs.load(std::memory_order_acquire);
-        const qint64 gap = now - lastUp;
-        if (lastUp > 0 && gap > 2 * dit) {
-            m_connection->sendCAT(QStringLiteral("KZ ;"));
-            if (gap > 5 * dit)
-                m_connection->sendCAT(QStringLiteral("KZ ;")); // word gap ~ two letter spaces
-        }
         m_skDownMs.store(now, std::memory_order_release);
         QMetaObject::invokeMethod(m_sidetone, "startHold", Qt::QueuedConnection);
-    } else {
-        const qint64 held = now - m_skDownMs.load(std::memory_order_acquire);
-        if (held >= kMinElementMs) {
-            // Element length is set by keyer speed, not KZL (KZL is inert for KZ elements
-            // on this path — verified on hardware). A dit is 1200/KS ms and a dah 3600/KS,
-            // so pick whichever element type puts the requested duration inside the usable
-            // KS range and solve for the speed. Together they cover ~20-450ms continuously.
-            const bool useDit = held <= kDitDahBoundaryMs;
-            const double scale = useDit ? 1200.0 : 3600.0;
-            const int ks = qBound(kMinKeyerWpm, static_cast<int>(scale / held + 0.5), kMaxKeyerWpm);
-            m_connection->sendCAT(QStringLiteral("KS%1;").arg(ks, 3, 10, QChar('0')));
-            m_connection->sendCAT(useDit ? QStringLiteral("KZ.;") : QStringLiteral("KZ-;"));
-        }
-        m_skLastUpMs.store(now, std::memory_order_release);
-        QMetaObject::invokeMethod(m_sidetone, "stopHold", Qt::QueuedConnection);
+        QMetaObject::invokeMethod(
+            this, [this]() { m_straightKeyWatchdog->start(kStraightKeyMaxHoldMs); }, Qt::QueuedConnection);
+        return;
     }
-}
 
-// Straight-key mode drives KS per element, so put the operator's own speed back when it
-// stops owning that setting.
-void CwController::restoreKeyerElementLength() {
-    const int wpm = qBound(kMinKeyerWpm, m_skNominalWpm.load(std::memory_order_acquire), kMaxKeyerWpm);
-    m_connection->sendCAT(QStringLiteral("KS%1;").arg(wpm, 3, 10, QChar('0')));
+    QMetaObject::invokeMethod(m_sidetone, "stopHold", Qt::QueuedConnection);
+    QMetaObject::invokeMethod(this, [this]() { m_straightKeyWatchdog->stop(); }, Qt::QueuedConnection);
+
+    const qint64 downAt = m_skDownMs.load(std::memory_order_acquire);
+    const qint64 held = now - downAt;
+    if (held < kMinElementMs)
+        return; // contact bounce, not an element — leave m_skLastUpMs alone
+
+    const qint64 lastUp = m_skLastUpMs.exchange(now, std::memory_order_acq_rel);
+    const qint64 gap = (lastUp > 0) ? (downAt - lastUp) : 0;
+
+    // The K4 queues these and plays D as silence after whatever it is still playing, so time
+    // it has ALREADY spent idle counts toward the gap and must come off D. Without this a
+    // long pause would be applied twice — once in real time, then again by the radio. A
+    // gap longer than the radio's backlog drives this to zero, so any pause in a QSO
+    // naturally resynchronizes and the next element goes out immediately.
+    const qint64 busyUntil = m_k4BusyUntilMs.load(std::memory_order_acquire);
+    const qint64 idle = qMax<qint64>(0, now - busyUntil);
+    const int effGap = static_cast<int>(qBound<qint64>(0, gap - idle, qint64(kMaxFieldMs)));
+    const int dur = static_cast<int>(qBound<qint64>(qint64(kMinElementMs), held, qint64(kMaxFieldMs)));
+
+    m_k4BusyUntilMs.store(qMax(now, busyUntil) + effGap + dur, std::memory_order_release);
+    m_connection->sendCAT(
+        QStringLiteral("KZD%1U%2;").arg(effGap, 4, 10, QChar('0')).arg(dur, 4, 10, QChar('0')));
 }
 
 void CwController::forceStraightKeyRelease() {
-    // KZ elements are self-terminating — nothing can be left keyed. Just drop local state.
-    restoreKeyerElementLength();
+    // Elements are self-terminating and nothing on the radio was borrowed, so there is
+    // nothing to undo here — just drop local state.
     m_skKeyDown.store(false, std::memory_order_release);
     m_skKeyed.store(false, std::memory_order_release);
+    m_skLastUpMs.store(0, std::memory_order_release);
+    m_k4BusyUntilMs.store(0, std::memory_order_release);
     QMetaObject::invokeMethod(m_sidetone, "stopHold", Qt::QueuedConnection);
     m_straightKeyWatchdog->stop();
 }
