@@ -334,7 +334,8 @@ void MainWindow::setupHardwareController() {
     // devices. Constructed immediately after so the devices exist; takes them by
     // injected pointer. See cwcontroller.h.
     m_cwController = new CwController(m_radioState, m_connectionController, m_hardwareController->iambicKeyer(),
-                                      m_hardwareController->sidetoneGenerator(), m_hardwareController->halikeyDevice(),
+                                      m_hardwareController->sidetoneGenerator(), m_hardwareController->keyerDevice(),
+                                      m_hardwareController->straightKeyDevice(),
                                       m_hardwareController->kpodPlusDevice(), this);
 
     // KPOD button presses → macro execution
@@ -423,7 +424,8 @@ void MainWindow::setupMenuBar() {
     optionsAction->setMenuRole(QAction::PreferencesRole); // macOS: moves to app menu as Preferences
     connect(optionsAction, &QAction::triggered, this, [this]() {
         if (!m_optionsDialog) {
-            m_optionsDialog = new OptionsDialog(m_radioState, m_audioController, m_hardwareController, m_catServer,
+            m_optionsDialog = new OptionsDialog(m_radioState, m_connectionController, m_audioController,
+                                                m_hardwareController, m_catServer,
                                                 m_kpa1500UiController->client(), m_dxClusterController, this);
         }
         m_optionsDialog->show();
@@ -1190,7 +1192,8 @@ void MainWindow::onRadioReady() {
     // KZL is the remote key-down initial delay (K4 reference Rev D5), not element length.
     // Straight-key mode derives it from the operator's speed bounds and sends its own on
     // connect, so only seed it here when that mode isn't active.
-    if (m_radioState->keyerSpeed() > 0 && !RadioSettings::instance()->halikeyStraightKeyMode()) {
+    if (m_radioState->keyerSpeed() > 0 &&
+        RadioSettings::instance()->keyerPortName(RadioSettings::KeyerRoleStraightKey).isEmpty()) {
         int ditMs = 1200 / m_radioState->keyerSpeed();
         m_connectionController->sendCAT(QString("KZL%1;").arg(ditMs, 2, 10, QChar('0')));
     }

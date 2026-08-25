@@ -62,7 +62,6 @@ public:
     int deviceType() const { return m_deviceType; }
 
     // Available ports
-    static QStringList availablePorts();
     static QList<HaliKeyPortInfo> availablePortsDetailed();
     static QStringList availableMidiDevices();
 

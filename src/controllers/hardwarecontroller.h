@@ -2,6 +2,7 @@
 #define HARDWARECONTROLLER_H
 
 #include <QObject>
+#include <QTimer>
 #include <QThread>
 
 class KpodDevice;
@@ -42,7 +43,10 @@ public:
     // dependency on the raw pointer.
     KpodDevice *kpodDevice() const { return m_kpodDevice; }
     KpodPlusDevice *kpodPlusDevice() const { return m_kpodPlusDevice; }
-    HalikeyDevice *halikeyDevice() const { return m_halikeyDevice; }
+    // Two HaliKey-class interfaces may be connected at once — a paddle driving the iambic
+    // keyer and a straight key/bug driving KZD/U elements. See RadioSettings::KeyerRole.
+    HalikeyDevice *keyerDevice() const { return m_keyerDevice; }
+    HalikeyDevice *straightKeyDevice() const { return m_straightKeyDevice; }
 
     // IambicKeyer + SidetoneGenerator accessors — consumed by CwController,
     // which is constructed right after HardwareController and wires the CW
@@ -83,7 +87,16 @@ private:
     KpodPlusDevice *m_kpodPlusDevice;
 
     // HaliKey CW paddle device
-    HalikeyDevice *m_halikeyDevice;
+    HalikeyDevice *m_keyerDevice;
+    HalikeyDevice *m_straightKeyDevice;
+
+    // Auto-connect lives here, not in the Options pages: those are lazily constructed, so a
+    // page the operator never opens would never arm it. Serial hotplug has no cross-platform
+    // Qt signal, hence polling; one attempt per appearance so a port that refuses (busy, or
+    // a Bluetooth tty that will never work) isn't hammered.
+    QTimer *m_keyerAutoConnectTimer = nullptr;
+    QString m_autoConnectAttempted[2];
+    void pollKeyerAutoConnect();
 
     // Iambic keyer state machine (HighPriority thread). Constructed + owned
     // here; CW signal wiring lives on CwController.

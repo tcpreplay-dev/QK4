@@ -10,10 +10,10 @@
 #include "settings/radiosettings.h"
 
 CwController::CwController(RadioState *radioState, ConnectionController *connection, IambicKeyer *keyer,
-                           SidetoneGenerator *sidetone, HalikeyDevice *halikey, KpodPlusDevice *kpodPlus,
-                           QObject *parent)
+                           SidetoneGenerator *sidetone, HalikeyDevice *keyerDevice,
+                           HalikeyDevice *straightKeyDevice, KpodPlusDevice *kpodPlus, QObject *parent)
     : QObject(parent), m_radioState(radioState), m_connection(connection), m_keyer(keyer), m_sidetone(sidetone),
-      m_halikey(halikey), m_kpodPlus(kpodPlus) {
+      m_keyerDevice(keyerDevice), m_straightKeyDevice(straightKeyDevice), m_kpodPlus(kpodPlus) {
 
     // =========================================================================
     // Initial keyer + sidetone state from RadioState
@@ -27,6 +27,7 @@ CwController::CwController(RadioState *radioState, ConnectionController *connect
         Q_ARG(IambicKeyer::Mode, m_radioState->iambicMode() == 'B' ? IambicKeyer::IambicB : IambicKeyer::IambicA));
     applyPaddleReversal();
     m_skClock.start();
+    updateStraightKeyTiming();
 
     if (m_radioState->cwPitch() > 0) {
         QMetaObject::invokeMethod(m_sidetone, "setFrequency", Qt::QueuedConnection,
@@ -51,7 +52,7 @@ CwController::CwController(RadioState *radioState, ConnectionController *connect
         // KZL is the remote key-down initial delay (K4 reference Rev D5), not element
         // length as the original comment here assumed. Straight-key mode derives it from
         // the operator's speed bounds and owns it while active — don't stomp that.
-        if (!m_straightKeyMode.load(std::memory_order_acquire)) {
+        if (!m_straightKeyDevice->isConnected()) {
             int ditMs = 1200 / wpm;
             m_connection->sendCAT(QString("KZL%1;").arg(ditMs, 2, 10, QChar('0')));
         }
@@ -69,29 +70,6 @@ CwController::CwController(RadioState *radioState, ConnectionController *connect
         applyPaddleReversal();
         if (m_kpodPlus->isPolling())
             m_kpodPlus->setKeyerParams(iambic == 'B' ? 1 : 0, paddle == 'R');
-    });
-
-    // Local "Swap paddles" toggle (RadioSettings, HaliKey-scoped) — recompute
-    // whenever it changes so it composes correctly with the K4's own KP setting.
-    connect(RadioSettings::instance(), &RadioSettings::halikeyPaddleSwappedChanged, this,
-            [this](bool) { applyPaddleReversal(); });
-
-    connect(RadioSettings::instance(), &RadioSettings::straightKeyTimingChanged, this, [this]() {
-        if (m_straightKeyMode.load(std::memory_order_acquire))
-            applyStraightKeyPreRoll();
-    });
-
-    // Straight Key / Bug mode (RadioSettings, HaliKey-scoped). Main-thread release
-    // store; the ditStateChanged/dahStateChanged handlers below read it with acquire
-    // ordering on the HaliKey worker thread — same pattern as m_cachedIsV14.
-    m_straightKeyMode.store(RadioSettings::instance()->halikeyStraightKeyMode(), std::memory_order_release);
-    connect(RadioSettings::instance(), &RadioSettings::halikeyStraightKeyModeChanged, this, [this](bool enabled) {
-        m_straightKeyMode.store(enabled, std::memory_order_release);
-        if (enabled)
-            applyStraightKeyPreRoll();
-        if (!enabled)
-            forceStraightKeyRelease(); // mode off mid-press: drop the half-finished element
-
     });
 
     // Max-hold watchdog: defense-in-depth against a wedged straight key (stuck
@@ -148,14 +126,20 @@ CwController::CwController(RadioState *radioState, ConnectionController *connect
     // is a plain main-thread singleton; the PTT handler runs on the HaliKey worker
     // thread — same store/load pattern as m_cachedMode above. setHoldGateEnabled is a
     // plain atomic write, safe to call directly from the main thread.
-    const bool initIsV14 = (RadioSettings::instance()->halikeyDeviceType() != 1);
-    m_cachedIsV14.store(initIsV14, std::memory_order_release);
-    m_keyer->setHoldGateEnabled(initIsV14);
-    connect(RadioSettings::instance(), &RadioSettings::halikeyDeviceTypeChanged, this, [this](int type) {
-        const bool isV14 = (type != 1);
+    // Tracks the PADDLE interface only — the straight-key device ignores DIT and PTT
+    // outright, so the V1.4 CTS demux never applies to it.
+    auto applyPaddleDeviceType = [this]() {
+        const bool isV14 =
+            (RadioSettings::instance()->keyerDeviceType(RadioSettings::KeyerRolePaddle) != 1);
         m_cachedIsV14.store(isV14, std::memory_order_release);
         m_keyer->setHoldGateEnabled(isV14);
-    });
+    };
+    applyPaddleDeviceType();
+    connect(RadioSettings::instance(), &RadioSettings::keyerConfigChanged, this,
+            [applyPaddleDeviceType](int role) {
+                if (role == RadioSettings::KeyerRolePaddle)
+                    applyPaddleDeviceType();
+            });
 
     // =========================================================================
     // Keyer → CAT commands + sidetone audio
@@ -225,7 +209,7 @@ CwController::CwController(RadioState *radioState, ConnectionController *connect
     // In CW mode: forward dit to keyer, ignore PTT (TX handled by KZ commands).
     // In voice mode: forward PTT to MainWindow, suppress dit (no keying in SSB/AM/FM).
     connect(
-        m_halikey, &HalikeyDevice::ditStateChanged, this,
+        m_keyerDevice, &HalikeyDevice::ditStateChanged, this,
         [this](bool pressed) {
             // Suppress HaliKey dit when KPOD+ keyer owns the CW path
             if (kpodPlusActive())
@@ -233,36 +217,57 @@ CwController::CwController(RadioState *radioState, ConnectionController *connect
             auto mode = static_cast<RadioState::Mode>(m_cachedMode.load(std::memory_order_acquire));
             if (mode != RadioState::CW && mode != RadioState::CW_R)
                 return; // In voice/data modes, dit is suppressed — PTT signal handles TX
-            if (m_straightKeyMode.load(std::memory_order_acquire))
-                return; // Straight Key / Bug: DIT is always ignored — see dahStateChanged below.
             m_keyer->setDitPaddle(pressed);
         },
         Qt::DirectConnection);
     connect(
-        m_halikey, &HalikeyDevice::dahStateChanged, this,
+        m_keyerDevice, &HalikeyDevice::dahStateChanged, this,
         [this](bool pressed) {
             if (kpodPlusActive())
                 return;
-            if (m_straightKeyMode.load(std::memory_order_acquire)) {
-                // Straight Key / Bug: DAH is the sole input — driven from a real, dedicated
-                // line on every HaliKey transport (V1.4: DCD||DSR; MIDI: note 21), unlike DIT
-                // which on V1.4 is impossible to distinguish from the foot pedal (see the PTT
-                // handler below) and is therefore always ignored, on every transport, so a
-                // 2-conductor straight key plugged into the paddle jack (which leaves the DIT
-                // line floating/undefined) can't leak spurious keying.
-                //
-                // Same CW-mode gate as the dit handler above — unlike the iambic path, a dah
-                // here drives TX; directly, so it must not leak into voice/data modes.
-                auto mode = static_cast<RadioState::Mode>(m_cachedMode.load(std::memory_order_acquire));
-                if (mode != RadioState::CW && mode != RadioState::CW_R)
-                    return;
-                m_skKeyDown.store(pressed, std::memory_order_release);
-                handleStraightKeyEdge();
-                return;
-            }
             m_keyer->setDahPaddle(pressed);
         },
         Qt::DirectConnection);
+
+    // =========================================================================
+    // Straight key / bug device → KZD/U elements (separate interface, own role)
+    // =========================================================================
+    // DAH is the sole input. It is a real, dedicated line on every transport (V1.4:
+    // DCD||DSR; MIDI: note 21), unlike DIT which on V1.4 cannot be distinguished from the
+    // foot pedal — so DIT and PTT are ignored outright here, letting a 2-conductor key
+    // (which leaves DIT floating) plug into the paddle jack without leaking keying.
+    connect(
+        m_straightKeyDevice, &HalikeyDevice::dahStateChanged, this,
+        [this](bool pressed) {
+            if (kpodPlusActive())
+                return;
+            // Unlike the iambic path, this emits elements directly, so it must not leak
+            // into voice/data modes.
+            auto mode = static_cast<RadioState::Mode>(m_cachedMode.load(std::memory_order_acquire));
+            if (mode != RadioState::CW && mode != RadioState::CW_R)
+                return;
+            m_skKeyDown.store(pressed, std::memory_order_release);
+            handleStraightKeyEdge();
+        },
+        Qt::DirectConnection);
+    connect(m_straightKeyDevice, &HalikeyDevice::connected, this,
+            [this]() { applyStraightKeyPreRoll(); });
+    // The paddle connecting or leaving changes whether a pre-roll is allowed at all.
+    connect(m_keyerDevice, &HalikeyDevice::connected, this, [this]() {
+        if (m_straightKeyDevice->isConnected())
+            applyStraightKeyPreRoll();
+    });
+    connect(m_straightKeyDevice, &HalikeyDevice::disconnected, this,
+            [this]() { forceStraightKeyRelease(); });
+    // Buffer toggle / speed / ratio edits must reach the radio immediately, not wait for the
+    // next connect — otherwise the checkbox looks inert.
+    connect(RadioSettings::instance(), &RadioSettings::straightKeyTimingChanged, this, [this]() {
+        // The bounce floor applies whether or not the radio is up; only KZL needs a link.
+        if (m_straightKeyDevice->isConnected())
+            applyStraightKeyPreRoll();
+        else
+            updateStraightKeyTiming();
+    });
 
     // HaliKey PTT → MainWindow (voice/data modes) or paddle dit (CW mode, V1.4 only).
     // WHY: V1.4 serial firmware can't distinguish foot pedal from paddle dit lever — both
@@ -270,7 +275,7 @@ CwController::CwController(RadioState *radioState, ConnectionController *connect
     // press, in voice it's the foot pedal → PTT. The MIDI variant has a distinct note for
     // the pedal so its CW behavior stays mode-gated to silence (no spurious dit injection).
     connect(
-        m_halikey, &HalikeyDevice::pttStateChanged, this,
+        m_keyerDevice, &HalikeyDevice::pttStateChanged, this,
         [this](bool active) {
             const bool isV14 = m_cachedIsV14.load(std::memory_order_acquire);
             if (active) {
@@ -284,16 +289,6 @@ CwController::CwController(RadioState *radioState, ConnectionController *connect
                     // matching falling edge will see V14PttNone and also drop.
                     if (kpodPlusActive())
                         return;
-                    if (m_straightKeyMode.load(std::memory_order_acquire)) {
-                        // Straight Key / Bug: V1.4's CTS line is the ONLY place a DIT/pedal
-                        // signal shows up (HaliKeyV14Worker hardcodes ditState=false, so
-                        // ditStateChanged never fires on this transport — see
-                        // readPinState()'s doc comment). DIT is always ignored in this mode
-                        // (see dahStateChanged above), so drop this edge the same way the
-                        // MIDI branch below drops its pedal press in CW: no destination
-                        // captured, matching falling edge sees V14PttNone and also drops.
-                        return;
-                    }
                     m_v14PttDestination.store(V14PttDitPaddle, std::memory_order_release);
                     m_keyer->setDitPaddle(true);
                 } else if (!inCw) {
@@ -324,7 +319,7 @@ CwController::CwController(RadioState *radioState, ConnectionController *connect
     // Enable keyer when radio connects, disable on disconnect
     connect(m_connection, &ConnectionController::radioReady, this, [this]() {
         QMetaObject::invokeMethod(m_keyer, "setEnabled", Qt::QueuedConnection, Q_ARG(bool, true));
-        if (m_straightKeyMode.load(std::memory_order_acquire))
+        if (m_straightKeyDevice->isConnected())
             applyStraightKeyPreRoll();
     });
     connect(m_connection, &ConnectionController::connectionStateChanged, this,
@@ -338,14 +333,13 @@ CwController::CwController(RadioState *radioState, ConnectionController *connect
                 }
             });
 
-    // Stop keyer when HaliKey disconnects (prevents runaway keying
-    // if paddle was held when disconnected — Note Off never arrives)
-    connect(m_halikey, &HalikeyDevice::disconnected, this, [this]() {
+    // Stop keyer when the paddle interface disconnects (prevents runaway keying if a
+    // paddle was held when it vanished — the release edge never arrives). The straight-key
+    // device has its own disconnect handler above.
+    connect(m_keyerDevice, &HalikeyDevice::disconnected, this, [this]() {
         QMetaObject::invokeMethod(m_keyer, "stop", Qt::QueuedConnection);
-        // Same runaway-keying risk applies to straight-key mode: the HaliKey vanished
-        // mid-press, so no release edge is coming. Force RX; through — the radio
-        // connection is (probably) still up here, unlike the case above.
-        forceStraightKeyRelease();
+        if (m_straightKeyDevice->isConnected())
+            applyStraightKeyPreRoll(); // pre-roll becomes permissible again
     });
 
     // =========================================================================
@@ -385,23 +379,48 @@ bool CwController::kpodPlusActive() const {
 }
 
 void CwController::applyPaddleReversal() {
+    // The K4's own KP orientation is the single source of truth — the Keyer page edits it
+    // directly, so there is no separate local override to compose with.
     const bool radioReversed = m_radioState->paddleOrientation() == 'R';
-    const bool localSwap = RadioSettings::instance()->halikeyPaddleSwapped();
-    QMetaObject::invokeMethod(m_keyer, "setReversed", Qt::QueuedConnection,
-                              Q_ARG(bool, radioReversed != localSwap));
+    QMetaObject::invokeMethod(m_keyer, "setReversed", Qt::QueuedConnection, Q_ARG(bool, radioReversed));
 }
 
 int CwController::straightKeyPreRollMs() const {
     auto *rs = RadioSettings::instance();
     if (!rs->straightKeyBufferEnabled())
         return 0;
-    const double dit = 1200.0 / qBound(5, rs->straightKeyMinWpm(), 35);
+    // KZL is one global radio setting, not per-role: a pre-roll set for the straight key
+    // delays the paddle's first element too, which operators rightly expect to be instant.
+    // So only apply it when the straight key is the only interface in use. With both
+    // connected the paddle wins — see the note on the Straight Key page.
+    if (m_keyerDevice->isConnected())
+        return 0;
+    const double dit = 1200.0 / qBound(5, rs->straightKeyMinWpm(), 80);
     const double l = dit * (1.0 + rs->straightKeyDahDitRatio()) * 1.3;
     return qBound(0, static_cast<int>(l + 0.5), kMaxPreRollMs);
 }
 
-void CwController::applyStraightKeyPreRoll() {
+// Puts KZL back to the value the iambic path expects (one dit at the current keyer speed),
+// matching what mainwindow seeds on connect.
+void CwController::restoreKeyerPreRoll() {
+    m_skPreRollMs.store(0, std::memory_order_release);
+    const int wpm = m_radioState->keyerSpeed();
+    if (wpm > 0)
+        m_connection->sendCAT(QStringLiteral("KZL%1;").arg(1200 / wpm, 4, 10, QChar('0')));
+}
+
+int CwController::straightKeyMinElementMs() const {
+    const int maxWpm = qBound(15, RadioSettings::instance()->straightKeyMaxWpm(), 80);
+    return qMin(kMinElementMs, 600 / maxWpm);
+}
+
+void CwController::updateStraightKeyTiming() {
     m_skPreRollMs.store(straightKeyPreRollMs(), std::memory_order_release);
+    m_skMinElementMs.store(straightKeyMinElementMs(), std::memory_order_release);
+}
+
+void CwController::applyStraightKeyPreRoll() {
+    updateStraightKeyTiming();
     m_connection->sendCAT(
         QStringLiteral("KZL%1;").arg(m_skPreRollMs.load(std::memory_order_acquire), 4, 10, QChar('0')));
 }
@@ -427,7 +446,7 @@ void CwController::handleStraightKeyEdge() {
 
     const qint64 downAt = m_skDownMs.load(std::memory_order_acquire);
     const qint64 held = now - downAt;
-    if (held < kMinElementMs)
+    if (held < m_skMinElementMs.load(std::memory_order_acquire))
         return; // contact bounce, not an element — leave m_skLastUpMs alone
 
     const qint64 lastUp = m_skLastUpMs.exchange(now, std::memory_order_acq_rel);
@@ -441,7 +460,8 @@ void CwController::handleStraightKeyEdge() {
     const qint64 busyUntil = m_k4BusyUntilMs.load(std::memory_order_acquire);
     const qint64 idle = qMax<qint64>(0, now - busyUntil);
     const int effGap = static_cast<int>(qBound<qint64>(0, gap - idle, qint64(kMaxFieldMs)));
-    const int dur = static_cast<int>(qBound<qint64>(qint64(kMinElementMs), held, qint64(kMaxFieldMs)));
+    const int dur = static_cast<int>(
+        qBound<qint64>(m_skMinElementMs.load(std::memory_order_acquire), held, qint64(kMaxFieldMs)));
 
     // The radio's KZL pre-roll lands only on a key-down after idle, so it extends how long
     // the radio stays busy at the start of a burst. Counting it here is what keeps idle==0
@@ -453,8 +473,10 @@ void CwController::handleStraightKeyEdge() {
 }
 
 void CwController::forceStraightKeyRelease() {
-    // Elements are self-terminating and nothing on the radio was borrowed, so there is
-    // nothing to undo here — just drop local state.
+    // Elements are self-terminating, so no un-key is needed — but KZL IS borrowed, and it is
+    // a global radio setting. Leaving a pre-roll behind would delay the paddle keyer, which
+    // is exactly the regression this whole mechanism has to avoid.
+    restoreKeyerPreRoll();
     m_skKeyDown.store(false, std::memory_order_release);
     m_skKeyed.store(false, std::memory_order_release);
     m_skLastUpMs.store(0, std::memory_order_release);

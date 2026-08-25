@@ -1,10 +1,15 @@
 #include "ui/dialogs/optionsdialog.h"
+
+#include <QFrame>
+#include <QScrollArea>
+
 #include "ui/pages/aboutpage.h"
 #include "ui/pages/stationpage.h"
 #include "ui/pages/audioinputpage.h"
 #include "ui/pages/audiooutputpage.h"
 #include "ui/pages/rigcontrolpage.h"
 #include "ui/pages/cwkeyerpage.h"
+#include "ui/pages/straightkeypage.h"
 #include "ui/pages/kpodpage.h"
 #include "ui/pages/kpa1500page.h"
 #include "ui/pages/dxclusterpage.h"
@@ -13,10 +18,12 @@
 #include "controllers/hardwarecontroller.h"
 #include <QHBoxLayout>
 
-OptionsDialog::OptionsDialog(RadioState *radioState, AudioController *audioController,
-                             HardwareController *hardwareController, CatServer *catServer, KPA1500Client *kpa1500Client,
+OptionsDialog::OptionsDialog(RadioState *radioState, ConnectionController *connectionController,
+                             AudioController *audioController, HardwareController *hardwareController,
+                             CatServer *catServer, KPA1500Client *kpa1500Client,
                              DxClusterController *dxClusterController, QWidget *parent)
-    : QDialog(parent), m_radioState(radioState), m_audioController(audioController),
+    : QDialog(parent), m_radioState(radioState), m_connectionController(connectionController),
+      m_audioController(audioController),
       m_hardwareController(hardwareController), m_catServer(catServer), m_kpa1500Client(kpa1500Client),
       m_dxClusterController(dxClusterController) {
     setWindowModality(Qt::ApplicationModal);
@@ -56,7 +63,8 @@ void OptionsDialog::setupUi() {
     m_tabList->addItem("Audio Input");
     m_tabList->addItem("Audio Output");
     m_tabList->addItem("Rig Control");
-    m_tabList->addItem("HaliKey");
+    m_tabList->addItem("Keyer");
+    m_tabList->addItem("Straight Key");
     m_tabList->addItem("K-Pod");
     m_tabList->addItem("KPA1500");
     m_tabList->addItem("DX Cluster");
@@ -75,6 +83,12 @@ void OptionsDialog::setupUi() {
         ensurePageCreated(index);
         m_pageStack->setCurrentIndex(index);
         refreshPage(index);
+        // Serial port polling is comparatively expensive on Windows, so only the visible
+        // page scans — except where auto-connect is still waiting (handled inside the page).
+        if (m_cwKeyerPage)
+            m_cwKeyerPage->setPageVisible(index == PageCwKeyer);
+        if (m_straightKeyPage)
+            m_straightKeyPage->setPageVisible(index == PageStraightKey);
     });
 
     // Push notifications for audio device changes (hot-plug/unplug)
@@ -127,8 +141,15 @@ void OptionsDialog::ensurePageCreated(int index) {
         page = m_rigControlPage;
         break;
     case PageCwKeyer:
-        m_cwKeyerPage = new CwKeyerPage(m_hardwareController->halikeyDevice(), this);
+        m_cwKeyerPage = new CwKeyerPage(m_hardwareController->keyerDevice(),
+                                        m_hardwareController->straightKeyDevice(), m_radioState,
+                                        m_connectionController, this);
         page = m_cwKeyerPage;
+        break;
+    case PageStraightKey:
+        m_straightKeyPage = new StraightKeyPage(m_hardwareController->straightKeyDevice(),
+                                                m_hardwareController->keyerDevice(), this);
+        page = m_straightKeyPage;
         break;
     case PageKpod:
         m_kpodPage = new KpodPage(m_hardwareController->kpodDevice(), m_hardwareController->kpodPlusDevice(), this);
@@ -146,10 +167,19 @@ void OptionsDialog::ensurePageCreated(int index) {
         return;
     }
 
+    // Wrap every page so a tall one scrolls instead of compressing its controls into
+    // unusable slivers — the Keyer and Straight Key pages are taller than the dialog.
+    auto *scroll = new QScrollArea(this);
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    scroll->setStyleSheet("QScrollArea { background: transparent; }");
+    scroll->setWidget(page);
+
     QWidget *placeholder = m_pageStack->widget(index);
     m_pageStack->removeWidget(placeholder);
     delete placeholder;
-    m_pageStack->insertWidget(index, page);
+    m_pageStack->insertWidget(index, scroll);
     m_pageCreated[index] = true;
 }
 
@@ -175,6 +205,10 @@ void OptionsDialog::refreshPage(int index) {
     case PageCwKeyer:
         if (m_cwKeyerPage)
             m_cwKeyerPage->refresh();
+        break;
+    case PageStraightKey:
+        if (m_straightKeyPage)
+            m_straightKeyPage->refresh();
         break;
     case PageKpod:
         if (m_kpodPage)

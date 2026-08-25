@@ -1,13 +1,44 @@
 #include "ui/pages/cwkeyerpage.h"
-#include "ui/styling/k4styles.h"
-#include "hardware/halikeydevice.h"
-#include "settings/radiosettings.h"
-#include <QVBoxLayout>
-#include <QHBoxLayout>
-#include <QFrame>
 
-CwKeyerPage::CwKeyerPage(HalikeyDevice *halikeyDevice, QWidget *parent)
-    : QWidget(parent), m_halikeyDevice(halikeyDevice) {
+#include "controllers/connectioncontroller.h"
+#include "models/radiostate.h"
+#include "settings/radiosettings.h"
+#include "ui/styling/k4styles.h"
+#include "ui/widgets/keyerconnectionwidget.h"
+
+#include <QButtonGroup>
+#include <QFrame>
+#include <QHBoxLayout>
+#include <QVBoxLayout>
+
+namespace {
+// KP's weight field is 090-125 in steps of 5, shown to the operator as a ratio 0.90-1.25.
+constexpr int kWeightMin = 90;
+constexpr int kWeightMax = 125;
+constexpr int kWeightStep = 5;
+// Shown until the radio reports KP. 1.10 rather than 1.00 — a little extra weight is the
+// more common preference and reads better on the air.
+constexpr int kWeightDefault = 110;
+
+int weightToSlider(int weight) {
+    return (qBound(kWeightMin, weight, kWeightMax) - kWeightMin) / kWeightStep;
+}
+int sliderToWeight(int pos) {
+    return kWeightMin + pos * kWeightStep;
+}
+
+QFrame *separator(QWidget *parent) {
+    auto *line = new QFrame(parent);
+    line->setFrameShape(QFrame::HLine);
+    line->setStyleSheet(K4Styles::Dialog::separator());
+    line->setFixedHeight(K4Styles::Dimensions::SeparatorHeight);
+    return line;
+}
+} // namespace
+
+CwKeyerPage::CwKeyerPage(HalikeyDevice *device, HalikeyDevice *straightKeyDevice, RadioState *radioState,
+                         ConnectionController *connection, QWidget *parent)
+    : QWidget(parent), m_radioState(radioState), m_connection(connection) {
     setStyleSheet(K4Styles::Dialog::pageBackground());
 
     auto *layout = new QVBoxLayout(this);
@@ -15,310 +46,187 @@ CwKeyerPage::CwKeyerPage(HalikeyDevice *halikeyDevice, QWidget *parent)
                                K4Styles::Dimensions::DialogMargin, K4Styles::Dimensions::DialogMargin);
     layout->setSpacing(K4Styles::Dimensions::PaddingLarge);
 
-    // Title
-    auto *titleLabel = new QLabel("HaliKey", this);
-    titleLabel->setStyleSheet(K4Styles::Dialog::titleLabel());
-    layout->addWidget(titleLabel);
+    auto *title = new QLabel("Keyer", this);
+    title->setStyleSheet(K4Styles::Dialog::titleLabel());
+    layout->addWidget(title);
 
-    // Description (dynamic based on device type)
-    m_cwKeyerDescLabel = new QLabel(this);
-    m_cwKeyerDescLabel->setStyleSheet(QString("color: %1; font-size: %2px;")
-                                          .arg(K4Styles::Colors::TextGray)
-                                          .arg(K4Styles::Dimensions::FontSizeButton));
-    m_cwKeyerDescLabel->setWordWrap(true);
-    layout->addWidget(m_cwKeyerDescLabel);
+    auto *desc = new QLabel("Connect a paddle interface to send CW through the K4's built-in keyer. "
+                            "CW is sent over the air with near original cadence, regardless of network "
+                            "jitter or traffic. For Haliday 3.5mm stereo plug, tip is Dah and ring is Dit.",
+                            this);
+    desc->setWordWrap(true);
+    desc->setStyleSheet(K4Styles::Dialog::helpText());
+    layout->addWidget(desc);
 
-    // Device Type selector
-    auto *deviceTypeLayout = new QHBoxLayout();
-    auto *deviceTypeLabel = new QLabel("Device Type:", this);
-    deviceTypeLabel->setStyleSheet(K4Styles::Dialog::formLabel());
-    deviceTypeLabel->setFixedWidth(K4Styles::Dimensions::FormLabelWidth);
+    m_connectionWidget = new KeyerConnectionWidget(RadioSettings::KeyerRolePaddle, device, straightKeyDevice, this);
+    layout->addWidget(m_connectionWidget);
 
-    m_cwKeyerDeviceTypeCombo = new QComboBox(this);
-    m_cwKeyerDeviceTypeCombo->setStyleSheet(K4Styles::Dialog::comboBox());
-    m_cwKeyerDeviceTypeCombo->addItem("HaliKey V1.4", 0);
-    m_cwKeyerDeviceTypeCombo->addItem("HaliKey MIDI", 1);
+    layout->addWidget(separator(this));
 
-    int savedDeviceType = RadioSettings::instance()->halikeyDeviceType();
-    m_cwKeyerDeviceTypeCombo->setCurrentIndex(savedDeviceType);
-    updateCwKeyerDescription();
+    // ---- Radio keyer (KP) --------------------------------------------------------
+    auto *radioHeader = new QLabel("Radio Keyer (K4)", this);
+    radioHeader->setStyleSheet(K4Styles::Dialog::sectionHeader());
+    layout->addWidget(radioHeader);
 
-    connect(m_cwKeyerDeviceTypeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) {
-        int type = m_cwKeyerDeviceTypeCombo->itemData(index).toInt();
-        RadioSettings::instance()->setHalikeyDeviceType(type);
-        // Disconnect if connected, since device type changed
-        if (m_halikeyDevice && m_halikeyDevice->isConnected()) {
-            m_halikeyDevice->closePort();
-        }
-        updateCwKeyerDescription();
-        populateCwKeyerPorts();
+    auto *modeRow = new QHBoxLayout();
+    auto *modeLabel = new QLabel("Iambic mode:", this);
+    modeLabel->setStyleSheet(K4Styles::Dialog::formLabel());
+    modeLabel->setMinimumWidth(120);
+    m_iambicARadio = new QRadioButton("A", this);
+    m_iambicBRadio = new QRadioButton("B", this);
+    auto *modeGroup = new QButtonGroup(this);
+    modeGroup->addButton(m_iambicARadio);
+    modeGroup->addButton(m_iambicBRadio);
+    for (auto *rb : {m_iambicARadio, m_iambicBRadio}) {
+        rb->setStyleSheet(K4Styles::Dialog::checkBox());
+        // Only the newly-checked button acts; the one being cleared also emits toggled.
+        connect(rb, &QRadioButton::toggled, this, [this](bool checked) {
+            if (checked)
+                sendKeyerPaddle();
+        });
+    }
+    modeRow->addWidget(modeLabel);
+    modeRow->addWidget(m_iambicARadio);
+    modeRow->addWidget(m_iambicBRadio);
+    modeRow->addStretch();
+    layout->addLayout(modeRow);
+
+    auto *orientRow = new QHBoxLayout();
+    auto *orientLabel = new QLabel("Paddles:", this);
+    orientLabel->setStyleSheet(K4Styles::Dialog::formLabel());
+    orientLabel->setMinimumWidth(120);
+    m_orientNormalRadio = new QRadioButton("Normal", this);
+    m_orientReversedRadio = new QRadioButton("Reversed", this);
+    auto *orientGroup = new QButtonGroup(this);
+    orientGroup->addButton(m_orientNormalRadio);
+    orientGroup->addButton(m_orientReversedRadio);
+    for (auto *rb : {m_orientNormalRadio, m_orientReversedRadio}) {
+        rb->setStyleSheet(K4Styles::Dialog::checkBox());
+        connect(rb, &QRadioButton::toggled, this, [this](bool checked) {
+            if (checked)
+                sendKeyerPaddle();
+        });
+    }
+    orientRow->addWidget(orientLabel);
+    orientRow->addWidget(m_orientNormalRadio);
+    orientRow->addWidget(m_orientReversedRadio);
+    orientRow->addStretch();
+    layout->addLayout(orientRow);
+
+    auto *weightRow = new QHBoxLayout();
+    auto *weightLabel = new QLabel("Weight:", this);
+    weightLabel->setStyleSheet(K4Styles::Dialog::formLabel());
+    weightLabel->setMinimumWidth(120);
+    m_weightSlider = new QSlider(Qt::Horizontal, this);
+    m_weightSlider->setStyleSheet(
+        K4Styles::sliderHorizontal(K4Styles::Colors::DarkBackground, K4Styles::Colors::AccentAmber));
+    m_weightSlider->setRange(0, (kWeightMax - kWeightMin) / kWeightStep); // 8 detents
+    m_weightSlider->setPageStep(1);
+    m_weightSlider->setTickPosition(QSlider::TicksBelow);
+    m_weightSlider->setTickInterval(1);
+    m_weightValueLabel = new QLabel(QString::number(kWeightDefault / 100.0, 'f', 2), this);
+    m_weightValueLabel->setStyleSheet(
+        K4Styles::Dialog::labelText(K4Styles::Colors::TextWhite, K4Styles::Dimensions::FontSizePopup));
+    m_weightValueLabel->setMinimumWidth(K4Styles::Dimensions::SliderValueLabelWidth);
+    connect(m_weightSlider, &QSlider::valueChanged, this, [this](int pos) {
+        m_weightValueLabel->setText(QString::number(sliderToWeight(pos) / 100.0, 'f', 2));
+        sendKeyerPaddle();
     });
+    weightRow->addWidget(weightLabel);
+    weightRow->addWidget(m_weightSlider, 1);
+    weightRow->addWidget(m_weightValueLabel);
+    layout->addLayout(weightRow);
 
-    deviceTypeLayout->addWidget(deviceTypeLabel);
-    deviceTypeLayout->addWidget(m_cwKeyerDeviceTypeCombo, 1);
-    layout->addLayout(deviceTypeLayout);
+    auto *weightHelp = new QLabel("Dah-to-Dit ratio, 1.00 is standard. Lower is lighter, higher is heavier.", this);
+    weightHelp->setWordWrap(true);
+    weightHelp->setStyleSheet(K4Styles::Dialog::helpText());
+    layout->addWidget(weightHelp);
 
-    // Swap paddles — local override, independent of the K4's own paddle-orientation
-    // setting (KP). Only affects the HaliKey path; KPOD+ has its own onboard keyer
-    // and mirrors the K4 directly (see CwController).
-    m_swapPaddlesCheck = new QCheckBox("Swap paddles (dit/dah)", this);
-    m_swapPaddlesCheck->setStyleSheet(K4Styles::Dialog::checkBox());
-    m_swapPaddlesCheck->setChecked(RadioSettings::instance()->halikeyPaddleSwapped());
-    connect(m_swapPaddlesCheck, &QCheckBox::toggled, this,
-            [](bool checked) { RadioSettings::instance()->setHalikeyPaddleSwapped(checked); });
-    layout->addWidget(m_swapPaddlesCheck);
+    layout->addWidget(separator(this));
 
-    // DAH drives one KZD<gap>U<duration>; per element; DIT is always ignored (V1.4 can't
-    // distinguish it from the foot pedal). See CwController::handleStraightKeyEdge().
-    m_straightKeyCheck = new QCheckBox("Straight Key / Bug (bypass iambic keyer)", this);
-    m_straightKeyCheck->setStyleSheet(K4Styles::Dialog::checkBox());
-    m_straightKeyCheck->setChecked(RadioSettings::instance()->halikeyStraightKeyMode());
-    connect(m_straightKeyCheck, &QCheckBox::toggled, this,
-            [](bool checked) { RadioSettings::instance()->setHalikeyStraightKeyMode(checked); });
-    layout->addWidget(m_straightKeyCheck);
+    // ---- Sidetone (same setting as the Straight Key page) ------------------------
+    auto *sidetoneHeader = new QLabel("Sidetone", this);
+    sidetoneHeader->setStyleSheet(K4Styles::Dialog::sectionHeader());
+    layout->addWidget(sidetoneHeader);
 
-    auto *straightKeyHelpLabel =
-        new QLabel("Wire your key to the DAH line (DIT is always ignored). Elements are "
-                   "sent with your actual key timing, so weighting and spacing carry "
-                   "through; the radio lags by one element.",
-                   this);
-    straightKeyHelpLabel->setWordWrap(true);
-    straightKeyHelpLabel->setStyleSheet(K4Styles::Dialog::helpText());
-    layout->addWidget(straightKeyHelpLabel);
-
-    // Separator line
-    auto *line = new QFrame(this);
-    line->setFrameShape(QFrame::HLine);
-    line->setStyleSheet(K4Styles::Dialog::separator());
-    line->setFixedHeight(K4Styles::Dimensions::SeparatorHeight);
-    layout->addWidget(line);
-
-    // Status indicator
-    auto *statusLayout = new QHBoxLayout();
-    auto *statusTitleLabel = new QLabel("Status:", this);
-    statusTitleLabel->setStyleSheet(K4Styles::Dialog::formLabel());
-    statusTitleLabel->setFixedWidth(K4Styles::Dimensions::FormLabelWidth);
-
-    m_cwKeyerStatusLabel = new QLabel("Not Connected", this);
-    m_cwKeyerStatusLabel->setStyleSheet(K4Styles::Dialog::statusLabel(K4Styles::Colors::ErrorRed));
-
-    statusLayout->addWidget(statusTitleLabel);
-    statusLayout->addWidget(m_cwKeyerStatusLabel);
-    statusLayout->addStretch();
-    layout->addLayout(statusLayout);
-
-    // Separator line
-    auto *line2 = new QFrame(this);
-    line2->setFrameShape(QFrame::HLine);
-    line2->setStyleSheet(K4Styles::Dialog::separator());
-    line2->setFixedHeight(K4Styles::Dimensions::SeparatorHeight);
-    layout->addWidget(line2);
-
-    // Connection Settings section
-    auto *sectionLabel = new QLabel("Connection Settings", this);
-    sectionLabel->setStyleSheet(K4Styles::Dialog::sectionHeader());
-    layout->addWidget(sectionLabel);
-
-    // Port selection
-    auto *portLayout = new QHBoxLayout();
-    auto *portLabel = new QLabel("Port:", this);
-    portLabel->setStyleSheet(K4Styles::Dialog::formLabel());
-    portLabel->setFixedWidth(K4Styles::Dimensions::FormLabelWidth);
-
-    m_cwKeyerPortCombo = new QComboBox(this);
-    m_cwKeyerPortCombo->setStyleSheet(K4Styles::Dialog::comboBox());
-    populateCwKeyerPorts();
-
-    m_cwKeyerRefreshBtn = new QPushButton("Refresh", this);
-    m_cwKeyerRefreshBtn->setStyleSheet(K4Styles::Dialog::actionButtonSmall());
-    connect(m_cwKeyerRefreshBtn, &QPushButton::clicked, this, &CwKeyerPage::onCwKeyerRefreshClicked);
-
-    portLayout->addWidget(portLabel);
-    portLayout->addWidget(m_cwKeyerPortCombo, 1);
-    portLayout->addWidget(m_cwKeyerRefreshBtn);
-    layout->addLayout(portLayout);
-
-    // Connect/Disconnect button
-    m_cwKeyerConnectBtn = new QPushButton("Connect", this);
-    m_cwKeyerConnectBtn->setStyleSheet(K4Styles::Dialog::actionButton());
-    connect(m_cwKeyerConnectBtn, &QPushButton::clicked, this, &CwKeyerPage::onCwKeyerConnectClicked);
-    layout->addWidget(m_cwKeyerConnectBtn);
-
-    // Separator line
-    auto *line3 = new QFrame(this);
-    line3->setFrameShape(QFrame::HLine);
-    line3->setStyleSheet(K4Styles::Dialog::separator());
-    line3->setFixedHeight(K4Styles::Dimensions::SeparatorHeight);
-    layout->addWidget(line3);
-
-    // Separator line
-    auto *line5 = new QFrame(this);
-    line5->setFrameShape(QFrame::HLine);
-    line5->setStyleSheet(K4Styles::Dialog::separator());
-    line5->setFixedHeight(K4Styles::Dimensions::SeparatorHeight);
-    layout->addWidget(line5);
-
-    // Sidetone Settings section
-    auto *sidetoneLabel = new QLabel("Sidetone Settings", this);
-    sidetoneLabel->setStyleSheet(K4Styles::Dialog::sectionHeader());
-    layout->addWidget(sidetoneLabel);
-
-    // Sidetone volume slider
-    auto *volumeLayout = new QHBoxLayout();
-    auto *volumeLabel = new QLabel("Volume:", this);
-    volumeLabel->setStyleSheet(K4Styles::Dialog::formLabel());
-    volumeLabel->setFixedWidth(K4Styles::Dimensions::FormLabelWidth);
-
+    auto *volRow = new QHBoxLayout();
+    auto *volLabel = new QLabel("Volume:", this);
+    volLabel->setStyleSheet(K4Styles::Dialog::formLabel());
+    volLabel->setMinimumWidth(120);
     m_sidetoneVolumeSlider = new QSlider(Qt::Horizontal, this);
-    m_sidetoneVolumeSlider->setRange(0, 100);
-    m_sidetoneVolumeSlider->setValue(RadioSettings::instance()->sidetoneVolume());
     m_sidetoneVolumeSlider->setStyleSheet(
         K4Styles::sliderHorizontal(K4Styles::Colors::DarkBackground, K4Styles::Colors::AccentAmber));
-
+    m_sidetoneVolumeSlider->setRange(0, 100);
+    m_sidetoneVolumeSlider->setValue(RadioSettings::instance()->sidetoneVolume());
     m_sidetoneVolumeValueLabel = new QLabel(QString("%1%").arg(RadioSettings::instance()->sidetoneVolume()), this);
-    m_sidetoneVolumeValueLabel->setStyleSheet(QString("color: %1; font-size: %2px;")
-                                                  .arg(K4Styles::Colors::TextWhite)
-                                                  .arg(K4Styles::Dimensions::FontSizePopup));
-    m_sidetoneVolumeValueLabel->setFixedWidth(K4Styles::Dimensions::SliderValueLabelWidth);
-
+    m_sidetoneVolumeValueLabel->setStyleSheet(
+        K4Styles::Dialog::labelText(K4Styles::Colors::TextWhite, K4Styles::Dimensions::FontSizePopup));
+    m_sidetoneVolumeValueLabel->setMinimumWidth(K4Styles::Dimensions::SliderValueLabelWidth);
     connect(m_sidetoneVolumeSlider, &QSlider::valueChanged, this, [this](int value) {
         m_sidetoneVolumeValueLabel->setText(QString("%1%").arg(value));
         RadioSettings::instance()->setSidetoneVolume(value);
     });
+    volRow->addWidget(volLabel);
+    volRow->addWidget(m_sidetoneVolumeSlider, 1);
+    volRow->addWidget(m_sidetoneVolumeValueLabel);
+    layout->addLayout(volRow);
 
-    volumeLayout->addWidget(volumeLabel);
-    volumeLayout->addWidget(m_sidetoneVolumeSlider, 1);
-    volumeLayout->addWidget(m_sidetoneVolumeValueLabel);
-    layout->addLayout(volumeLayout);
-
-    // Sidetone help text
-    auto *sidetoneHelpLabel =
-        new QLabel("Local sidetone volume for CW keying feedback. Frequency is linked to K4's CW pitch setting.", this);
-    sidetoneHelpLabel->setStyleSheet(K4Styles::Dialog::helpText());
-    sidetoneHelpLabel->setWordWrap(true);
-    layout->addWidget(sidetoneHelpLabel);
+    auto *sidetoneHelp = new QLabel("Local sidetone for CW keying feedback, shared with the Straight Key "
+                                    "page. Pitch follows the K4's CW pitch setting.",
+                                    this);
+    sidetoneHelp->setWordWrap(true);
+    sidetoneHelp->setStyleSheet(K4Styles::Dialog::helpText());
+    layout->addWidget(sidetoneHelp);
 
     layout->addStretch();
 
-    // Connect to HalikeyDevice signals for status updates
-    if (m_halikeyDevice) {
-        connect(m_halikeyDevice, &HalikeyDevice::connected, this, &CwKeyerPage::updateCwKeyerStatus);
-        connect(m_halikeyDevice, &HalikeyDevice::disconnected, this, &CwKeyerPage::updateCwKeyerStatus);
-    }
+    // The radio is the source of truth for KP — follow its echoes rather than assuming our
+    // writes landed.
+    connect(m_radioState, &RadioState::keyerPaddleChanged, this, [this](QChar, QChar, int) { updateFromRadio(); });
+    updateFromRadio();
+}
 
-    // Initialize status
-    updateCwKeyerStatus();
+void CwKeyerPage::updateFromRadio() {
+    m_updatingFromRadio = true;
+    // Iambic mode is null until the radio reports KP (it arrives in the RDY dump), so
+    // fall back to B — the more common choice, and the K4's own default.
+    const bool iambicB = m_radioState->iambicMode().isNull() || m_radioState->iambicMode() == 'B';
+    m_iambicARadio->setChecked(!iambicB);
+    m_iambicBRadio->setChecked(iambicB);
+    const bool reversed = (m_radioState->paddleOrientation() == 'R');
+    m_orientNormalRadio->setChecked(!reversed);
+    m_orientReversedRadio->setChecked(reversed);
+    const int weight = m_radioState->keyingWeight() > 0 ? m_radioState->keyingWeight() : kWeightDefault;
+    m_weightSlider->setValue(weightToSlider(weight));
+    m_weightValueLabel->setText(QString::number(sliderToWeight(m_weightSlider->value()) / 100.0, 'f', 2));
+    m_updatingFromRadio = false;
+}
+
+void CwKeyerPage::sendKeyerPaddle() {
+    if (m_updatingFromRadio)
+        return; // echo from the radio, not an operator edit
+    // KP sets iambic mode, orientation and weight in one command, so all three must go
+    // together or the untouched two get clobbered — same reason buttonrowdispatcher does it.
+    const QChar iambic = m_iambicBRadio->isChecked() ? 'B' : 'A';
+    const QChar orient = m_orientReversedRadio->isChecked() ? 'R' : 'N';
+    const int weight = sliderToWeight(m_weightSlider->value());
+    m_connection->sendCAT(QString("KP%1%2%3;").arg(iambic).arg(orient).arg(weight, 3, 10, QChar('0')));
+    // The K4 does not echo KP, so nothing else will update RadioState — and the local keyer
+    // reads paddleOrientation() to decide dit/dah. Same optimistic set buttonrowdispatcher
+    // does for its N/R toggle.
+    m_radioState->setIambicMode(iambic);
+    m_radioState->setPaddleOrientation(orient);
+    m_radioState->setKeyingWeight(weight);
+}
+
+void CwKeyerPage::setPageVisible(bool visible) {
+    if (m_connectionWidget)
+        m_connectionWidget->setPollingActive(visible);
 }
 
 void CwKeyerPage::refresh() {
-    populateCwKeyerPorts();
-    updateCwKeyerStatus();
-}
-
-void CwKeyerPage::populateCwKeyerPorts() {
-    if (!m_cwKeyerPortCombo)
-        return;
-
-    // Block signals to avoid triggering save during repopulation
-    m_cwKeyerPortCombo->blockSignals(true);
-    m_cwKeyerPortCombo->clear();
-
-    int deviceType = m_cwKeyerDeviceTypeCombo ? m_cwKeyerDeviceTypeCombo->currentData().toInt() : 0;
-    QString savedPort = RadioSettings::instance()->halikeyPortName();
-    int selectedIndex = -1;
-
-    if (deviceType == 1) {
-        // MIDI device -- enumerate MIDI ports
-        QStringList midiDevices = HalikeyDevice::availableMidiDevices();
-        for (int i = 0; i < midiDevices.size(); i++) {
-            m_cwKeyerPortCombo->addItem(midiDevices[i], midiDevices[i]);
-            if (midiDevices[i] == savedPort) {
-                selectedIndex = i;
-            }
-        }
-        // Auto-select first HaliKey MIDI device if no saved selection matched
-        if (selectedIndex < 0) {
-            for (int i = 0; i < midiDevices.size(); i++) {
-                if (midiDevices[i].contains("HaliKey", Qt::CaseInsensitive)) {
-                    selectedIndex = i;
-                    break;
-                }
-            }
-        }
-    } else {
-        // V14 device -- enumerate serial ports
-        auto ports = HalikeyDevice::availablePortsDetailed();
-        for (int i = 0; i < ports.size(); i++) {
-            m_cwKeyerPortCombo->addItem(ports[i].portName, ports[i].portName);
-            if (ports[i].portName == savedPort) {
-                selectedIndex = i;
-            }
-        }
-    }
-
-    if (selectedIndex >= 0) {
-        m_cwKeyerPortCombo->setCurrentIndex(selectedIndex);
-    }
-    m_cwKeyerPortCombo->blockSignals(false);
-
-    // Save selection when changed (reconnect since we may be called multiple times)
-    m_cwKeyerPortCombo->disconnect(this);
-    connect(m_cwKeyerPortCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) {
-        if (index >= 0) {
-            QString portName = m_cwKeyerPortCombo->itemData(index).toString();
-            RadioSettings::instance()->setHalikeyPortName(portName);
-        }
-    });
-}
-
-void CwKeyerPage::updateCwKeyerDescription() {
-    if (!m_cwKeyerDescLabel || !m_cwKeyerDeviceTypeCombo)
-        return;
-
-    int type = m_cwKeyerDeviceTypeCombo->currentData().toInt();
-    if (type == 1) {
-        m_cwKeyerDescLabel->setText("Connect a HaliKey MIDI paddle interface to send CW via the K4's keyer. "
-                                    "The HaliKey MIDI uses standard MIDI note events to detect paddle and PTT inputs.");
-    } else {
-        m_cwKeyerDescLabel->setText("Connect a HaliKey paddle interface to send CW via the K4's keyer. "
-                                    "The HaliKey uses serial port flow control signals to detect paddle inputs.");
-    }
-}
-
-void CwKeyerPage::onCwKeyerRefreshClicked() {
-    populateCwKeyerPorts();
-}
-
-void CwKeyerPage::onCwKeyerConnectClicked() {
-    if (!m_halikeyDevice)
-        return;
-
-    if (m_halikeyDevice->isConnected()) {
-        // Disconnect
-        m_halikeyDevice->closePort();
-    } else {
-        // Connect -- use port name from item data (without annotation suffix)
-        QString portName = m_cwKeyerPortCombo->currentData().toString();
-        if (!portName.isEmpty()) {
-            RadioSettings::instance()->setHalikeyPortName(portName);
-            m_halikeyDevice->openPort(portName);
-        }
-    }
-}
-
-void CwKeyerPage::updateCwKeyerStatus() {
-    if (!m_cwKeyerStatusLabel || !m_cwKeyerConnectBtn)
-        return;
-
-    bool isConnected = m_halikeyDevice && m_halikeyDevice->isConnected();
-
-    if (isConnected) {
-        m_cwKeyerStatusLabel->setText(QString("Connected to %1").arg(m_halikeyDevice->portName()));
-        m_cwKeyerStatusLabel->setStyleSheet(K4Styles::Dialog::statusLabel(K4Styles::Colors::StatusGreen));
-        m_cwKeyerConnectBtn->setText("Disconnect");
-    } else {
-        m_cwKeyerStatusLabel->setText("Not Connected");
-        m_cwKeyerStatusLabel->setStyleSheet(K4Styles::Dialog::statusLabel(K4Styles::Colors::ErrorRed));
-        m_cwKeyerConnectBtn->setText("Connect");
-    }
+    if (m_connectionWidget)
+        m_connectionWidget->refresh();
+    m_sidetoneVolumeSlider->setValue(RadioSettings::instance()->sidetoneVolume());
+    updateFromRadio();
 }

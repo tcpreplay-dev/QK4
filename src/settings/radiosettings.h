@@ -107,17 +107,20 @@ public:
     MacroEntry macro(const QString &functionId) const;
     void setMacro(const QString &functionId, const QString &label, const QString &command);
 
-    // HaliKey CW Keyer settings
-    QString halikeyPortName() const;
-    void setHalikeyPortName(const QString &portName);
-    bool halikeyEnabled() const;
-    void setHalikeyEnabled(bool enabled);
-    int halikeyDeviceType() const;
-    void setHalikeyDeviceType(int type); // 0=V14, 1=MiDi
-    bool halikeyPaddleSwapped() const;
-    void setHalikeyPaddleSwapped(bool swapped);
-    bool halikeyStraightKeyMode() const;
-    void setHalikeyStraightKeyMode(bool enabled);
+    // Keyer device roles. Two HaliKey-class interfaces may be connected at once: a paddle
+    // driving the iambic keyer, and a straight key/bug driving KZD/U elements directly.
+    // Which role an input plays is now decided by the device it arrived on, replacing the
+    // old single global "straight key mode" flag.
+    enum KeyerRole { KeyerRolePaddle = 0, KeyerRoleStraightKey = 1, KeyerRoleCount = 2 };
+    Q_ENUM(KeyerRole)
+
+    QString keyerPortName(KeyerRole role) const;
+    void setKeyerPortName(KeyerRole role, const QString &portName);
+    int keyerDeviceType(KeyerRole role) const; // 0=V1.4, 1=MIDI
+    void setKeyerDeviceType(KeyerRole role, int type);
+    bool keyerAutoConnect(KeyerRole role) const;
+    void setKeyerAutoConnect(KeyerRole role, bool enabled);
+
 
     // Straight-key timing buffer. The radio applies a key-down pre-roll (KZL) so its
     // element queue never drains mid-character; without it every dah following a dit
@@ -126,9 +129,9 @@ public:
     bool straightKeyBufferEnabled() const;
     void setStraightKeyBufferEnabled(bool enabled);
     int straightKeyMinWpm() const;
-    void setStraightKeyMinWpm(int wpm); // 5-35, slowest element the operator sends
+    void setStraightKeyMinWpm(int wpm); // 5-80, never above straightKeyMaxWpm()
     int straightKeyMaxWpm() const;
-    void setStraightKeyMaxWpm(int wpm); // 15-80, drives contact-bounce rejection
+    void setStraightKeyMaxWpm(int wpm); // 15-80, never below straightKeyMinWpm()
     double straightKeyDahDitRatio() const;
     void setStraightKeyDahDitRatio(double ratio); // 2.5-5.0, operator's own sending style
     int sidetoneVolume() const;
@@ -191,11 +194,8 @@ signals:
     void catServerEnabledChanged(bool enabled);
     void catServerPortChanged(quint16 port);
     void macrosChanged();
-    void halikeyEnabledChanged(bool enabled);
-    void halikeyPortNameChanged(const QString &portName);
-    void halikeyDeviceTypeChanged(int type);
-    void halikeyPaddleSwappedChanged(bool swapped);
-    void halikeyStraightKeyModeChanged(bool enabled);
+    // Port, device type or auto-connect changed for one role (RadioSettings::KeyerRole).
+    void keyerConfigChanged(int role);
     void straightKeyTimingChanged();
     void sidetoneVolumeChanged(int value);
     void rxEqPresetsChanged();
@@ -225,16 +225,14 @@ private:
     bool m_catServerEnabled = false;
     quint16 m_catServerPort = 9299;
 
-    // HaliKey settings
-    QString m_halikeyPortName;
-    bool m_halikeyEnabled = false;
-    int m_halikeyDeviceType = 0; // 0=V14, 1=MiDi
-    bool m_halikeyPaddleSwapped = false;
-    bool m_halikeyStraightKeyMode = false;
+    // Keyer settings, indexed by KeyerRole
+    QString m_keyerPortName[KeyerRoleCount];
+    int m_keyerDeviceType[KeyerRoleCount] = {0, 0};
+    bool m_keyerAutoConnect[KeyerRoleCount] = {false, false};
     bool m_straightKeyBufferEnabled = false;
-    int m_straightKeyMinWpm = 15;
+    int m_straightKeyMinWpm = 20;
     int m_straightKeyMaxWpm = 35;
-    double m_straightKeyDahDitRatio = 3.0;
+    double m_straightKeyDahDitRatio = 4.0;
     int m_sidetoneVolume = 30;   // Default 30%
 
     // Macro settings

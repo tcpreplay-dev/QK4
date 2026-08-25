@@ -123,15 +123,6 @@ QString HalikeyDevice::portName() const {
     return m_portName;
 }
 
-QStringList HalikeyDevice::availablePorts() {
-    QStringList ports;
-    const auto portInfos = QSerialPortInfo::availablePorts();
-    for (const QSerialPortInfo &info : portInfos) {
-        ports.append(info.portName());
-    }
-    return ports;
-}
-
 QList<HaliKeyPortInfo> HalikeyDevice::availablePortsDetailed() {
     QList<HaliKeyPortInfo> ports;
     const auto portInfos = QSerialPortInfo::availablePorts();

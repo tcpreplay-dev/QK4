@@ -165,6 +165,8 @@ set(SOURCES
     src/ui/pages/audiooutputpage.cpp
     src/ui/pages/rigcontrolpage.cpp
     src/ui/pages/cwkeyerpage.cpp
+    src/ui/pages/straightkeypage.cpp
+    src/ui/widgets/keyerconnectionwidget.cpp
     src/ui/pages/kpodpage.cpp
     src/ui/pages/kpa1500page.cpp
     src/ui/pages/dxclusterpage.cpp
@@ -300,6 +302,8 @@ set(HEADERS
     src/ui/pages/audiooutputpage.h
     src/ui/pages/rigcontrolpage.h
     src/ui/pages/cwkeyerpage.h
+    src/ui/pages/straightkeypage.h
+    src/ui/widgets/keyerconnectionwidget.h
     src/ui/pages/kpodpage.h
     src/ui/pages/kpa1500page.h
     src/ui/pages/dxclusterpage.h
