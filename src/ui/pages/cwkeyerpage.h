@@ -2,6 +2,7 @@
 #define CWKEYERPAGE_H
 
 #include <QWidget>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QLabel>
 #include <QPushButton>
@@ -34,6 +35,7 @@ private:
     HalikeyDevice *m_halikeyDevice;
     QComboBox *m_cwKeyerDeviceTypeCombo = nullptr;
     QLabel *m_cwKeyerDescLabel = nullptr;
+    QCheckBox *m_swapPaddlesCheck = nullptr;
     QComboBox *m_cwKeyerPortCombo = nullptr;
     QPushButton *m_cwKeyerRefreshBtn = nullptr;
     QPushButton *m_cwKeyerConnectBtn = nullptr;
