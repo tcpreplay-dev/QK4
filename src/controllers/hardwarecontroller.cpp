@@ -123,12 +123,19 @@ HardwareController::HardwareController(RadioState *radioState, ConnectionControl
     });
 
     // =========================================================================
-    // HaliKey CW paddle device — device type injected here so HalikeyDevice
+    // HaliKey devices, one per role — device type injected here so HalikeyDevice
     // itself doesn't reach into RadioSettings (Phase 3 layering cleanup).
     // =========================================================================
-    m_halikeyDevice = new HalikeyDevice(RadioSettings::instance()->halikeyDeviceType(), this);
-    connect(RadioSettings::instance(), &RadioSettings::halikeyDeviceTypeChanged, m_halikeyDevice,
-            &HalikeyDevice::setDeviceType);
+    auto *rs = RadioSettings::instance();
+    m_keyerDevice = new HalikeyDevice(rs->keyerDeviceType(RadioSettings::KeyerRolePaddle), this);
+    m_straightKeyDevice =
+        new HalikeyDevice(rs->keyerDeviceType(RadioSettings::KeyerRoleStraightKey), this);
+    connect(rs, &RadioSettings::keyerConfigChanged, this, [this](int role) {
+        auto *s = RadioSettings::instance();
+        auto r = static_cast<RadioSettings::KeyerRole>(role);
+        auto *dev = (r == RadioSettings::KeyerRoleStraightKey) ? m_straightKeyDevice : m_keyerDevice;
+        dev->setDeviceType(s->keyerDeviceType(r));
+    });
 
     // =========================================================================
     // Sidetone generator (dedicated thread for low-latency audio feedback)
@@ -186,8 +193,17 @@ HardwareController::HardwareController(RadioState *radioState, ConnectionControl
     // Surface HaliKey port-open failures to the user via NotificationWidget. Without
     // this connect, openPort() failures (nonexistent serial port, busy MIDI device,
     // permission denied) were silently swallowed.
-    connect(m_halikeyDevice, &HalikeyDevice::connectionError, this,
-            [this](const QString &error) { emit hardwareError(QStringLiteral("HaliKey: %1").arg(error)); });
+    // Auto-connect poll — see the member's doc comment for why it isn't in the UI.
+    m_keyerAutoConnectTimer = new QTimer(this);
+    m_keyerAutoConnectTimer->setInterval(1500);
+    connect(m_keyerAutoConnectTimer, &QTimer::timeout, this, &HardwareController::pollKeyerAutoConnect);
+    m_keyerAutoConnectTimer->start();
+
+    connect(m_keyerDevice, &HalikeyDevice::connectionError, this,
+            [this](const QString &error) { emit hardwareError(QStringLiteral("Keyer: %1").arg(error)); });
+    connect(m_straightKeyDevice, &HalikeyDevice::connectionError, this, [this](const QString &error) {
+        emit hardwareError(QStringLiteral("Straight Key: %1").arg(error));
+    });
 }
 
 void HardwareController::shutdownSidetone() {
@@ -205,8 +221,11 @@ HardwareController::~HardwareController() {
     // HaliKey stops paddle events first, then keyer (producer of KZ commands) stops
     // before sidetone (the audio consumer) is torn down.
 
-    if (m_halikeyDevice) {
-        m_halikeyDevice->closePort();
+    if (m_keyerDevice) {
+        m_keyerDevice->closePort();
+    }
+    if (m_straightKeyDevice) {
+        m_straightKeyDevice->closePort();
     }
 
     if (m_keyerThread) {
@@ -303,5 +322,43 @@ void HardwareController::onKpodEnabledChanged(bool enabled) {
         }
     } else {
         m_kpodDevice->stopPolling();
+    }
+}
+
+void HardwareController::pollKeyerAutoConnect() {
+    auto *rs = RadioSettings::instance();
+    for (int r = 0; r < RadioSettings::KeyerRoleCount; ++r) {
+        const auto role = static_cast<RadioSettings::KeyerRole>(r);
+        auto *dev = (role == RadioSettings::KeyerRoleStraightKey) ? m_straightKeyDevice : m_keyerDevice;
+        auto *other = (role == RadioSettings::KeyerRoleStraightKey) ? m_keyerDevice : m_straightKeyDevice;
+        if (dev->isConnected() || !rs->keyerAutoConnect(role))
+            continue;
+
+        const QString want = rs->keyerPortName(role);
+        if (want.isEmpty())
+            continue;
+
+        // Same transport only: a serial port name can never collide with a MIDI device name.
+        const auto otherRole = (role == RadioSettings::KeyerRoleStraightKey) ? RadioSettings::KeyerRolePaddle
+                                                                            : RadioSettings::KeyerRoleStraightKey;
+        if (other->isConnected() && rs->keyerDeviceType(otherRole) == rs->keyerDeviceType(role) &&
+            other->portName() == want)
+            continue;
+
+        QStringList present;
+        if (rs->keyerDeviceType(role) == 1) {
+            present = HalikeyDevice::availableMidiDevices();
+        } else {
+            for (const auto &p : HalikeyDevice::availablePortsDetailed())
+                present << p.portName;
+        }
+        if (!present.contains(want)) {
+            m_autoConnectAttempted[r].clear(); // gone; a fresh appearance may succeed
+            continue;
+        }
+        if (m_autoConnectAttempted[r] == want)
+            continue; // already tried this appearance
+        m_autoConnectAttempted[r] = want;
+        dev->openPort(want);
     }
 }

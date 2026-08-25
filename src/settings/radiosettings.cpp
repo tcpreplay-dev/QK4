@@ -328,63 +328,47 @@ void RadioSettings::setMacro(const QString &functionId, const QString &label, co
     }
 }
 
-QString RadioSettings::halikeyPortName() const {
-    return m_halikeyPortName;
+namespace {
+// QSettings group per keyer role. Historical note: both roles were once a single "halikey"
+// group, migrated forward in load().
+const char *roleKey(RadioSettings::KeyerRole role) {
+    return role == RadioSettings::KeyerRoleStraightKey ? "straightkey" : "keyer";
+}
+} // namespace
+
+QString RadioSettings::keyerPortName(KeyerRole role) const {
+    return m_keyerPortName[role];
 }
 
-void RadioSettings::setHalikeyPortName(const QString &portName) {
-    if (m_halikeyPortName != portName) {
-        m_halikeyPortName = portName;
+void RadioSettings::setKeyerPortName(KeyerRole role, const QString &portName) {
+    if (m_keyerPortName[role] != portName) {
+        m_keyerPortName[role] = portName;
         save();
-        emit halikeyPortNameChanged(portName);
+        emit keyerConfigChanged(role);
     }
 }
 
-bool RadioSettings::halikeyEnabled() const {
-    return m_halikeyEnabled;
+int RadioSettings::keyerDeviceType(KeyerRole role) const {
+    return m_keyerDeviceType[role];
 }
 
-void RadioSettings::setHalikeyEnabled(bool enabled) {
-    if (m_halikeyEnabled != enabled) {
-        m_halikeyEnabled = enabled;
+void RadioSettings::setKeyerDeviceType(KeyerRole role, int type) {
+    if (m_keyerDeviceType[role] != type) {
+        m_keyerDeviceType[role] = type;
         save();
-        emit halikeyEnabledChanged(enabled);
+        emit keyerConfigChanged(role);
     }
 }
 
-int RadioSettings::halikeyDeviceType() const {
-    return m_halikeyDeviceType;
+bool RadioSettings::keyerAutoConnect(KeyerRole role) const {
+    return m_keyerAutoConnect[role];
 }
 
-void RadioSettings::setHalikeyDeviceType(int type) {
-    if (m_halikeyDeviceType != type) {
-        m_halikeyDeviceType = type;
+void RadioSettings::setKeyerAutoConnect(KeyerRole role, bool enabled) {
+    if (m_keyerAutoConnect[role] != enabled) {
+        m_keyerAutoConnect[role] = enabled;
         save();
-        emit halikeyDeviceTypeChanged(type);
-    }
-}
-
-bool RadioSettings::halikeyPaddleSwapped() const {
-    return m_halikeyPaddleSwapped;
-}
-
-void RadioSettings::setHalikeyPaddleSwapped(bool swapped) {
-    if (m_halikeyPaddleSwapped != swapped) {
-        m_halikeyPaddleSwapped = swapped;
-        save();
-        emit halikeyPaddleSwappedChanged(swapped);
-    }
-}
-
-bool RadioSettings::halikeyStraightKeyMode() const {
-    return m_halikeyStraightKeyMode;
-}
-
-void RadioSettings::setHalikeyStraightKeyMode(bool enabled) {
-    if (m_halikeyStraightKeyMode != enabled) {
-        m_halikeyStraightKeyMode = enabled;
-        save();
-        emit halikeyStraightKeyModeChanged(enabled);
+        emit keyerConfigChanged(role);
     }
 }
 
@@ -405,7 +389,9 @@ int RadioSettings::straightKeyMinWpm() const {
 }
 
 void RadioSettings::setStraightKeyMinWpm(int wpm) {
-    wpm = qBound(5, wpm, 35);
+    // Never above the fastest: the pair defines a range, and inverting it would make the
+    // pre-roll and bounce floor contradict each other.
+    wpm = qBound(5, wpm, qMin(80, m_straightKeyMaxWpm));
     if (m_straightKeyMinWpm != wpm) {
         m_straightKeyMinWpm = wpm;
         save();
@@ -418,7 +404,7 @@ int RadioSettings::straightKeyMaxWpm() const {
 }
 
 void RadioSettings::setStraightKeyMaxWpm(int wpm) {
-    wpm = qBound(15, wpm, 80);
+    wpm = qBound(qMax(5, m_straightKeyMinWpm), wpm, 80);
     if (m_straightKeyMaxWpm != wpm) {
         m_straightKeyMaxWpm = wpm;
         save();
@@ -638,17 +624,34 @@ void RadioSettings::load() {
         m_dxClusters.append(rbn);
     }
 
-    // HaliKey settings
-    m_halikeyPortName = m_settings.value("halikey/portName", "").toString();
-    m_halikeyEnabled = m_settings.value("halikey/enabled", false).toBool();
-    m_halikeyDeviceType = m_settings.value("halikey/deviceType", 0).toInt();
-    m_halikeyPaddleSwapped = m_settings.value("halikey/paddleSwapped", false).toBool();
-    m_halikeyStraightKeyMode = m_settings.value("halikey/straightKeyMode", false).toBool();
+    // Keyer settings, per role.
+    for (int r = 0; r < KeyerRoleCount; ++r) {
+        const QString g = QString::fromLatin1(roleKey(static_cast<KeyerRole>(r)));
+        m_keyerPortName[r] = m_settings.value(g + "/portName", "").toString();
+        m_keyerDeviceType[r] = m_settings.value(g + "/deviceType", 0).toInt();
+        m_keyerAutoConnect[r] = m_settings.value(g + "/autoConnect", false).toBool();
+    }
+    // One-time migration from the pre-role "halikey" group. The old build had a single
+    // device plus a straightKeyMode flag deciding what it was, so fold it into whichever
+    // role that flag selected. Idempotent — the source key is cleared afterwards.
+    if (m_settings.contains("halikey/portName")) {
+        const int r = m_settings.value("halikey/straightKeyMode", false).toBool() ? KeyerRoleStraightKey
+                                                                                  : KeyerRolePaddle;
+        m_keyerPortName[r] = m_settings.value("halikey/portName", "").toString();
+        m_keyerDeviceType[r] = m_settings.value("halikey/deviceType", 0).toInt();
+        m_settings.remove("halikey/portName");
+        m_settings.remove("halikey/enabled");
+        m_settings.remove("halikey/deviceType");
+        m_settings.remove("halikey/straightKeyMode");
+    }
     m_sidetoneVolume = m_settings.value("halikey/sidetoneVolume", 30).toInt();
     m_straightKeyBufferEnabled = m_settings.value("straightkey/bufferEnabled", false).toBool();
-    m_straightKeyMinWpm = m_settings.value("straightkey/minWpm", 15).toInt();
+    m_straightKeyMinWpm = m_settings.value("straightkey/minWpm", 20).toInt();
     m_straightKeyMaxWpm = m_settings.value("straightkey/maxWpm", 35).toInt();
-    m_straightKeyDahDitRatio = m_settings.value("straightkey/dahDitRatio", 3.0).toDouble();
+    m_straightKeyDahDitRatio = m_settings.value("straightkey/dahDitRatio", 4.0).toDouble();
+    // Clamp after both are read — a hand-edited or older config could invert the pair.
+    m_straightKeyMaxWpm = qBound(15, m_straightKeyMaxWpm, 80);
+    m_straightKeyMinWpm = qBound(5, m_straightKeyMinWpm, m_straightKeyMaxWpm);
 
     // KPOD+ keyer settings
     m_kpodPlusEncodeMode = m_settings.value("kpodPlus/encodeMode", 0).toInt();
@@ -742,12 +745,13 @@ void RadioSettings::save() {
     m_settings.setValue("catServer/enabled", m_catServerEnabled);
     m_settings.setValue("catServer/port", m_catServerPort);
 
-    // HaliKey settings
-    m_settings.setValue("halikey/portName", m_halikeyPortName);
-    m_settings.setValue("halikey/enabled", m_halikeyEnabled);
-    m_settings.setValue("halikey/deviceType", m_halikeyDeviceType);
-    m_settings.setValue("halikey/paddleSwapped", m_halikeyPaddleSwapped);
-    m_settings.setValue("halikey/straightKeyMode", m_halikeyStraightKeyMode);
+    // Keyer settings, per role.
+    for (int r = 0; r < KeyerRoleCount; ++r) {
+        const QString g = QString::fromLatin1(roleKey(static_cast<KeyerRole>(r)));
+        m_settings.setValue(g + "/portName", m_keyerPortName[r]);
+        m_settings.setValue(g + "/deviceType", m_keyerDeviceType[r]);
+        m_settings.setValue(g + "/autoConnect", m_keyerAutoConnect[r]);
+    }
     m_settings.setValue("halikey/sidetoneVolume", m_sidetoneVolume);
     m_settings.setValue("straightkey/bufferEnabled", m_straightKeyBufferEnabled);
     m_settings.setValue("straightkey/minWpm", m_straightKeyMinWpm);

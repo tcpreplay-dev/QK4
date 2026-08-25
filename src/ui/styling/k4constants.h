@@ -172,6 +172,8 @@ constexpr int PopupContentMargin = 12;
 // Common UI Heights
 // =============================================================================
 constexpr int SeparatorHeight = 1; // Horizontal/vertical separator lines
+// Floor for combos/buttons so a tall page can't compress them to slivers.
+constexpr int ComboMinHeight = 28;
 constexpr int MenuItemHeight = 40; // Menu overlay items, frequency labels
 constexpr int MenuBarHeight = 52;  // Bottom menu bar container height
 

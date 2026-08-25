@@ -42,7 +42,8 @@ class KpodPlusDevice;
 //         rs, cc,
 //         m_hardwareController->iambicKeyer(),
 //         m_hardwareController->sidetoneGenerator(),
-//         m_hardwareController->halikeyDevice(),
+//         m_hardwareController->keyerDevice(),
+//         m_hardwareController->straightKeyDevice(),
 //         m_hardwareController->kpodPlusDevice(),
 //         this);
 //
@@ -191,8 +192,8 @@ class CwController : public QObject {
 
 public:
     CwController(RadioState *radioState, ConnectionController *connection, IambicKeyer *keyer,
-                 SidetoneGenerator *sidetone, HalikeyDevice *halikey, KpodPlusDevice *kpodPlus,
-                 QObject *parent = nullptr);
+                 SidetoneGenerator *sidetone, HalikeyDevice *keyerDevice,
+                 HalikeyDevice *straightKeyDevice, KpodPlusDevice *kpodPlus, QObject *parent = nullptr);
     ~CwController() override;
 
 signals:
@@ -207,10 +208,8 @@ private:
     // set, all locally-driven KZ output + sidetone playback is suppressed.
     bool kpodPlusActive() const;
 
-    // Pushes the effective paddle-reversal state to m_keyer: the K4's own
-    // paddle-orientation setting (KP, mirrored via RadioState) XORed with the
-    // local "Swap paddles" toggle in RadioSettings. HaliKey-scoped only — the
-    // KPOD+ has its own onboard keyer and continues to mirror the K4 directly.
+    // Pushes the K4's own paddle orientation (KP, mirrored via RadioState) to m_keyer.
+    // HaliKey-scoped — the KPOD+ has its own onboard keyer and mirrors the K4 directly.
     void applyPaddleReversal();
 
     // Straight Key / Bug mode: bypasses IambicKeyer entirely. DAH is the sole input;
@@ -236,8 +235,21 @@ private:
     // below roughly 6 WPM at 3:1 the requested value is unreachable.
     int straightKeyPreRollMs() const;
 
-    // Pushes straightKeyPreRollMs() to the radio as KZLnnnn;.
+    // Bounce floor, half a dit at the operator's declared fastest sending. The straight key's
+    // speed is whatever their hand does, so unlike the paddle it can't be read from KS.
+    // Returns kMinElementMs until that speed exceeds ~60 WPM, where half a dit finally drops
+    // below it.
+    int straightKeyMinElementMs() const;
+
+    // Refreshes the cached timing values read on the HaliKey worker thread.
+    void updateStraightKeyTiming();
+
+    // updateStraightKeyTiming() plus pushing the pre-roll to the radio as KZLnnnn;.
     void applyStraightKeyPreRoll();
+
+    // Returns KZL to the iambic path's expectation. KZL is global, so a pre-roll left over
+    // from straight-key use would delay paddle keying.
+    void restoreKeyerPreRoll();
 
     // Drops straight-key state and silences the sidetone. No radio-side un-key needed.
     void forceStraightKeyRelease();
@@ -246,7 +258,8 @@ private:
     ConnectionController *m_connection;
     IambicKeyer *m_keyer;          // owned by HardwareController
     SidetoneGenerator *m_sidetone; // owned by HardwareController
-    HalikeyDevice *m_halikey;      // owned by HardwareController
+    HalikeyDevice *m_keyerDevice;       // paddle interface, owned by HardwareController
+    HalikeyDevice *m_straightKeyDevice; // straight key / bug, owned by HardwareController
     KpodPlusDevice *m_kpodPlus;    // owned by HardwareController
 
     // See "State moved from HardwareController" above for invariants.
@@ -260,11 +273,6 @@ private:
     enum V14PttDest { V14PttNone = 0, V14PttDitPaddle = 1, V14PttPtt = 2 };
     std::atomic<int> m_v14PttDestination{V14PttNone};
 
-    // Straight Key / Bug mode (RadioSettings-backed, HaliKey-scoped).
-    // Main-thread release store (ctor + halikeyStraightKeyModeChanged), HaliKey-worker
-    // acquire load in the dahStateChanged/pttStateChanged handlers — same pattern as
-    // m_cachedIsV14 above.
-    std::atomic<bool> m_straightKeyMode{false};
 
     // Raw DAH contact state while straight-key mode is active — the sole input; DIT is
     // always ignored (see handleStraightKeyEdge's doc comment above).
@@ -283,11 +291,15 @@ private:
     std::atomic<qint64> m_k4BusyUntilMs{0};
     // Mirror of the KZL value last sent, read on the HaliKey worker thread.
     std::atomic<int> m_skPreRollMs{0};
+    // Cached straightKeyMinElementMs(), same reason.
+    std::atomic<int> m_skMinElementMs{kMinElementMs};
 
     // Stuck-contact cleanup: an element is only emitted on release, so a wedged contact
     // means silence on the air and an endless sidetone. Bounds both.
     static constexpr int kStraightKeyMaxHoldMs = 5 * 1000;
-    // Shorter closures are contact bounce, not elements.
+    // Shorter closures are contact bounce, not elements. Only tightened past this when the
+    // operator declares a sending speed fast enough that half a dit is shorter — see
+    // straightKeyMinElementMs().
     static constexpr int kMinElementMs = 10;
     // Widest value a 4-digit D/U field holds.
     static constexpr int kMaxFieldMs = 9999;

@@ -19,7 +19,9 @@ class StationPage;
 class AudioInputPage;
 class AudioOutputPage;
 class RigControlPage;
+class ConnectionController;
 class CwKeyerPage;
+class StraightKeyPage;
 class KpodPage;
 class Kpa1500Page;
 class DxClusterPage;
@@ -40,13 +42,15 @@ public:
         PageAudioOutput,
         PageRigControl,
         PageCwKeyer,
+    PageStraightKey,
         PageKpod,
         PageKpa1500,
         PageDxCluster,
         PageCount
     };
 
-    explicit OptionsDialog(RadioState *radioState, AudioController *audioController,
+    explicit OptionsDialog(RadioState *radioState, ConnectionController *connectionController,
+                           AudioController *audioController,
                            HardwareController *hardwareController, CatServer *catServer, KPA1500Client *kpa1500Client,
                            DxClusterController *dxClusterController, QWidget *parent = nullptr);
     ~OptionsDialog();
@@ -61,6 +65,7 @@ private:
     void refreshPage(int index);
 
     RadioState *m_radioState;
+    ConnectionController *m_connectionController;
     AudioController *m_audioController;
     HardwareController *m_hardwareController;
     CatServer *m_catServer;
@@ -77,6 +82,7 @@ private:
     AudioInputPage *m_audioInputPage = nullptr;
     AudioOutputPage *m_audioOutputPage = nullptr;
     RigControlPage *m_rigControlPage = nullptr;
+    StraightKeyPage *m_straightKeyPage = nullptr;
     CwKeyerPage *m_cwKeyerPage = nullptr;
     KpodPage *m_kpodPage = nullptr;
     Kpa1500Page *m_kpa1500Page = nullptr;
