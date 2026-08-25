@@ -1,7 +1,9 @@
 #ifndef CWCONTROLLER_H
 #define CWCONTROLLER_H
 
+#include <QElapsedTimer>
 #include <QObject>
+#include <QTimer>
 #include <atomic>
 
 class RadioState;
@@ -64,6 +66,8 @@ class KpodPlusDevice;
 //   IambicKeyer::elementStarted          | sidetone dit/dah   | keyer -> sidetone thread  | AutoConnection (Queued)
 //   HalikeyDevice::ditStateChanged       | keyer setDitPaddle | HaliKey worker -> main    | DirectConnection
 //   HalikeyDevice::dahStateChanged       | keyer setDahPaddle | HaliKey worker -> main    | DirectConnection
+//                                        | or, in straight-key|                           |
+//                                        | mode, KZD/U to K4  | HaliKey worker -> I/O     | sendCAT self-marshals
 //   HalikeyDevice::pttStateChanged       | V1.4 demux:        | HaliKey worker -> main    | DirectConnection
 //                                        |  CW -> dit paddle  |                           |
 //                                        |  voice -> ptt      |                           |
@@ -143,6 +147,9 @@ class KpodPlusDevice;
 //   6. The KPOD+ keyer-active gate must be set on deviceInfoReady (not
 //      deviceConnected) so the ~10-100 ms open window doesn't leak
 //      paddle events to the local sidetone path.
+//   8. Straight-key timing is measured on the HaliKey worker thread but
+//      carried inside the KZD/U command, so the send may marshal freely;
+//      only the edge timestamps must stay precise.
 //   7. Destructor MUST run disconnect(this) first per CONVENTIONS Rule 11
 //      to sever signal connections before any cross-thread devices tear
 //      down underneath the connections.
@@ -206,6 +213,24 @@ private:
     // KPOD+ has its own onboard keyer and continues to mirror the K4 directly.
     void applyPaddleReversal();
 
+    // Straight Key / Bug mode: bypasses IambicKeyer entirely. DAH is the sole input;
+    // DIT is always ignored (on V1.4 it's indistinguishable from the foot pedal).
+    //
+    // On each release, emits one KZD<gap>U<duration>; — 4-digit milliseconds, D being the
+    // key-up gap preceding the element and U how long the key was actually held. Timing is
+    // carried IN the command, so element fidelity does not depend on when the command
+    // reaches the wire; only the edge timestamps need to be precise. The K4 queues these
+    // (verified: two back-to-back commands play as two distinct elements), so no pacing or
+    // send-side throttling is required.
+    //
+    // m_k4BusyUntilMs exists solely to keep D honest: the radio applies D as silence after
+    // whatever it is still playing, so any interval it has already spent idle has to be
+    // subtracted or a long pause gets counted twice.
+    void handleStraightKeyEdge();
+
+    // Drops straight-key state and silences the sidetone. No radio-side un-key needed.
+    void forceStraightKeyRelease();
+
     RadioState *m_radioState;
     ConnectionController *m_connection;
     IambicKeyer *m_keyer;          // owned by HardwareController
@@ -216,12 +241,44 @@ private:
     // See "State moved from HardwareController" above for invariants.
     std::atomic<int> m_cachedMode{0};
 
+
     // true = V1.4 serial (deviceType 0), false = MIDI (deviceType 1).
     // Main-thread release store, HaliKey-worker acquire load — see doc block.
     std::atomic<bool> m_cachedIsV14{true};
 
     enum V14PttDest { V14PttNone = 0, V14PttDitPaddle = 1, V14PttPtt = 2 };
     std::atomic<int> m_v14PttDestination{V14PttNone};
+
+    // Straight Key / Bug mode (RadioSettings-backed, HaliKey-scoped).
+    // Main-thread release store (ctor + halikeyStraightKeyModeChanged), HaliKey-worker
+    // acquire load in the dahStateChanged/pttStateChanged handlers — same pattern as
+    // m_cachedIsV14 above.
+    std::atomic<bool> m_straightKeyMode{false};
+
+    // Raw DAH contact state while straight-key mode is active — the sole input; DIT is
+    // always ignored (see handleStraightKeyEdge's doc comment above).
+    std::atomic<bool> m_skKeyDown{false};
+    // The state actually sent to the K4 — CAS-guarded in handleStraightKeyEdge() so a
+    // repeat of the same value never re-emits an element.
+    std::atomic<bool> m_skKeyed{false};
+
+    // Straight-key element timing. Free-running monotonic clock, same pattern as
+    // IambicKeyer::m_pressClock — started once in the ctor, read from the HaliKey worker
+    // thread, never reset (so it can't step under NTP mid-element).
+    QElapsedTimer m_skClock;
+    std::atomic<qint64> m_skDownMs{0};
+    std::atomic<qint64> m_skLastUpMs{0};
+    // When the K4 finishes playing everything already sent — see handleStraightKeyEdge().
+    std::atomic<qint64> m_k4BusyUntilMs{0};
+
+    // Stuck-contact cleanup: an element is only emitted on release, so a wedged contact
+    // means silence on the air and an endless sidetone. Bounds both.
+    static constexpr int kStraightKeyMaxHoldMs = 5 * 1000;
+    // Shorter closures are contact bounce, not elements.
+    static constexpr int kMinElementMs = 10;
+    // Widest value a 4-digit D/U field holds.
+    static constexpr int kMaxFieldMs = 9999;
+    QTimer *m_straightKeyWatchdog = nullptr;
 };
 
 #endif // CWCONTROLLER_H

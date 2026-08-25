@@ -26,6 +26,7 @@ CwController::CwController(RadioState *radioState, ConnectionController *connect
         m_keyer, "setMode", Qt::QueuedConnection,
         Q_ARG(IambicKeyer::Mode, m_radioState->iambicMode() == 'B' ? IambicKeyer::IambicB : IambicKeyer::IambicA));
     applyPaddleReversal();
+    m_skClock.start();
 
     if (m_radioState->cwPitch() > 0) {
         QMetaObject::invokeMethod(m_sidetone, "setFrequency", Qt::QueuedConnection,
@@ -70,6 +71,28 @@ CwController::CwController(RadioState *radioState, ConnectionController *connect
     // whenever it changes so it composes correctly with the K4's own KP setting.
     connect(RadioSettings::instance(), &RadioSettings::halikeyPaddleSwappedChanged, this,
             [this](bool) { applyPaddleReversal(); });
+
+    // Straight Key / Bug mode (RadioSettings, HaliKey-scoped). Main-thread release
+    // store; the ditStateChanged/dahStateChanged handlers below read it with acquire
+    // ordering on the HaliKey worker thread — same pattern as m_cachedIsV14.
+    m_straightKeyMode.store(RadioSettings::instance()->halikeyStraightKeyMode(), std::memory_order_release);
+    connect(RadioSettings::instance(), &RadioSettings::halikeyStraightKeyModeChanged, this, [this](bool enabled) {
+        m_straightKeyMode.store(enabled, std::memory_order_release);
+        if (!enabled)
+            forceStraightKeyRelease(); // mode off mid-press: drop the half-finished element
+
+    });
+
+    // Max-hold watchdog: defense-in-depth against a wedged straight key (stuck
+    // contact, dropped release edge). Lives on the main thread; started/stopped
+    // from handleStraightKeyEdge() via invokeMethod since that runs on the HaliKey
+    // worker thread.
+    m_straightKeyWatchdog = new QTimer(this);
+    m_straightKeyWatchdog->setSingleShot(true);
+    connect(m_straightKeyWatchdog, &QTimer::timeout, this, [this]() {
+        qWarning("CwController: straight-key watchdog fired — forcing RX after max hold duration");
+        forceStraightKeyRelease();
+    });
 
     connect(m_radioState, &RadioState::cwPitchChanged, this, [this](int pitchHz) {
         QMetaObject::invokeMethod(m_sidetone, "setFrequency", Qt::QueuedConnection, Q_ARG(int, pitchHz));
@@ -197,10 +220,11 @@ CwController::CwController(RadioState *radioState, ConnectionController *connect
             if (kpodPlusActive())
                 return;
             auto mode = static_cast<RadioState::Mode>(m_cachedMode.load(std::memory_order_acquire));
-            if (mode == RadioState::CW || mode == RadioState::CW_R) {
-                m_keyer->setDitPaddle(pressed);
-            }
-            // In voice/data modes, dit is suppressed — PTT signal handles TX
+            if (mode != RadioState::CW && mode != RadioState::CW_R)
+                return; // In voice/data modes, dit is suppressed — PTT signal handles TX
+            if (m_straightKeyMode.load(std::memory_order_acquire))
+                return; // Straight Key / Bug: DIT is always ignored — see dahStateChanged below.
+            m_keyer->setDitPaddle(pressed);
         },
         Qt::DirectConnection);
     connect(
@@ -208,6 +232,23 @@ CwController::CwController(RadioState *radioState, ConnectionController *connect
         [this](bool pressed) {
             if (kpodPlusActive())
                 return;
+            if (m_straightKeyMode.load(std::memory_order_acquire)) {
+                // Straight Key / Bug: DAH is the sole input — driven from a real, dedicated
+                // line on every HaliKey transport (V1.4: DCD||DSR; MIDI: note 21), unlike DIT
+                // which on V1.4 is impossible to distinguish from the foot pedal (see the PTT
+                // handler below) and is therefore always ignored, on every transport, so a
+                // 2-conductor straight key plugged into the paddle jack (which leaves the DIT
+                // line floating/undefined) can't leak spurious keying.
+                //
+                // Same CW-mode gate as the dit handler above — unlike the iambic path, a dah
+                // here drives TX; directly, so it must not leak into voice/data modes.
+                auto mode = static_cast<RadioState::Mode>(m_cachedMode.load(std::memory_order_acquire));
+                if (mode != RadioState::CW && mode != RadioState::CW_R)
+                    return;
+                m_skKeyDown.store(pressed, std::memory_order_release);
+                handleStraightKeyEdge();
+                return;
+            }
             m_keyer->setDahPaddle(pressed);
         },
         Qt::DirectConnection);
@@ -232,6 +273,16 @@ CwController::CwController(RadioState *radioState, ConnectionController *connect
                     // matching falling edge will see V14PttNone and also drop.
                     if (kpodPlusActive())
                         return;
+                    if (m_straightKeyMode.load(std::memory_order_acquire)) {
+                        // Straight Key / Bug: V1.4's CTS line is the ONLY place a DIT/pedal
+                        // signal shows up (HaliKeyV14Worker hardcodes ditState=false, so
+                        // ditStateChanged never fires on this transport — see
+                        // readPinState()'s doc comment). DIT is always ignored in this mode
+                        // (see dahStateChanged above), so drop this edge the same way the
+                        // MIDI branch below drops its pedal press in CW: no destination
+                        // captured, matching falling edge sees V14PttNone and also drops.
+                        return;
+                    }
                     m_v14PttDestination.store(V14PttDitPaddle, std::memory_order_release);
                     m_keyer->setDitPaddle(true);
                 } else if (!inCw) {
@@ -260,19 +311,29 @@ CwController::CwController(RadioState *radioState, ConnectionController *connect
         Qt::DirectConnection);
 
     // Enable keyer when radio connects, disable on disconnect
-    connect(m_connection, &ConnectionController::radioReady, this,
-            [this]() { QMetaObject::invokeMethod(m_keyer, "setEnabled", Qt::QueuedConnection, Q_ARG(bool, true)); });
+    connect(m_connection, &ConnectionController::radioReady, this, [this]() {
+        QMetaObject::invokeMethod(m_keyer, "setEnabled", Qt::QueuedConnection, Q_ARG(bool, true));
+    });
     connect(m_connection, &ConnectionController::connectionStateChanged, this,
             [this](TcpClient::ConnectionState state) {
                 if (state == TcpClient::Disconnected) {
                     QMetaObject::invokeMethod(m_keyer, "setEnabled", Qt::QueuedConnection, Q_ARG(bool, false));
+                    m_skKeyDown.store(false, std::memory_order_release);
+                    m_skKeyed.store(false, std::memory_order_release);
+                    m_straightKeyWatchdog->stop();
+                    QMetaObject::invokeMethod(m_sidetone, "stopHold", Qt::QueuedConnection);
                 }
             });
 
     // Stop keyer when HaliKey disconnects (prevents runaway keying
     // if paddle was held when disconnected — Note Off never arrives)
-    connect(m_halikey, &HalikeyDevice::disconnected, this,
-            [this]() { QMetaObject::invokeMethod(m_keyer, "stop", Qt::QueuedConnection); });
+    connect(m_halikey, &HalikeyDevice::disconnected, this, [this]() {
+        QMetaObject::invokeMethod(m_keyer, "stop", Qt::QueuedConnection);
+        // Same runaway-keying risk applies to straight-key mode: the HaliKey vanished
+        // mid-press, so no release edge is coming. Force RX; through — the radio
+        // connection is (probably) still up here, unlike the case above.
+        forceStraightKeyRelease();
+    });
 
     // =========================================================================
     // KPOD+ keyer-active gate + EP02 keyer data routing
@@ -315,4 +376,57 @@ void CwController::applyPaddleReversal() {
     const bool localSwap = RadioSettings::instance()->halikeyPaddleSwapped();
     QMetaObject::invokeMethod(m_keyer, "setReversed", Qt::QueuedConnection,
                               Q_ARG(bool, radioReversed != localSwap));
+}
+
+void CwController::handleStraightKeyEdge() {
+    const bool down = m_skKeyDown.load(std::memory_order_acquire);
+    bool expected = !down;
+    if (!m_skKeyed.compare_exchange_strong(expected, down, std::memory_order_acq_rel))
+        return; // contact bounce / repeated same-direction edge
+
+    const qint64 now = m_skClock.elapsed();
+
+    if (down) {
+        m_skDownMs.store(now, std::memory_order_release);
+        QMetaObject::invokeMethod(m_sidetone, "startHold", Qt::QueuedConnection);
+        QMetaObject::invokeMethod(
+            this, [this]() { m_straightKeyWatchdog->start(kStraightKeyMaxHoldMs); }, Qt::QueuedConnection);
+        return;
+    }
+
+    QMetaObject::invokeMethod(m_sidetone, "stopHold", Qt::QueuedConnection);
+    QMetaObject::invokeMethod(this, [this]() { m_straightKeyWatchdog->stop(); }, Qt::QueuedConnection);
+
+    const qint64 downAt = m_skDownMs.load(std::memory_order_acquire);
+    const qint64 held = now - downAt;
+    if (held < kMinElementMs)
+        return; // contact bounce, not an element — leave m_skLastUpMs alone
+
+    const qint64 lastUp = m_skLastUpMs.exchange(now, std::memory_order_acq_rel);
+    const qint64 gap = (lastUp > 0) ? (downAt - lastUp) : 0;
+
+    // The K4 queues these and plays D as silence after whatever it is still playing, so time
+    // it has ALREADY spent idle counts toward the gap and must come off D. Without this a
+    // long pause would be applied twice — once in real time, then again by the radio. A
+    // gap longer than the radio's backlog drives this to zero, so any pause in a QSO
+    // naturally resynchronizes and the next element goes out immediately.
+    const qint64 busyUntil = m_k4BusyUntilMs.load(std::memory_order_acquire);
+    const qint64 idle = qMax<qint64>(0, now - busyUntil);
+    const int effGap = static_cast<int>(qBound<qint64>(0, gap - idle, qint64(kMaxFieldMs)));
+    const int dur = static_cast<int>(qBound<qint64>(qint64(kMinElementMs), held, qint64(kMaxFieldMs)));
+
+    m_k4BusyUntilMs.store(qMax(now, busyUntil) + effGap + dur, std::memory_order_release);
+    m_connection->sendCAT(
+        QStringLiteral("KZD%1U%2;").arg(effGap, 4, 10, QChar('0')).arg(dur, 4, 10, QChar('0')));
+}
+
+void CwController::forceStraightKeyRelease() {
+    // Elements are self-terminating and nothing on the radio was borrowed, so there is
+    // nothing to undo here — just drop local state.
+    m_skKeyDown.store(false, std::memory_order_release);
+    m_skKeyed.store(false, std::memory_order_release);
+    m_skLastUpMs.store(0, std::memory_order_release);
+    m_k4BusyUntilMs.store(0, std::memory_order_release);
+    QMetaObject::invokeMethod(m_sidetone, "stopHold", Qt::QueuedConnection);
+    m_straightKeyWatchdog->stop();
 }

@@ -376,6 +376,18 @@ void RadioSettings::setHalikeyPaddleSwapped(bool swapped) {
     }
 }
 
+bool RadioSettings::halikeyStraightKeyMode() const {
+    return m_halikeyStraightKeyMode;
+}
+
+void RadioSettings::setHalikeyStraightKeyMode(bool enabled) {
+    if (m_halikeyStraightKeyMode != enabled) {
+        m_halikeyStraightKeyMode = enabled;
+        save();
+        emit halikeyStraightKeyModeChanged(enabled);
+    }
+}
+
 int RadioSettings::sidetoneVolume() const {
     return m_sidetoneVolume;
 }
@@ -580,6 +592,7 @@ void RadioSettings::load() {
     m_halikeyEnabled = m_settings.value("halikey/enabled", false).toBool();
     m_halikeyDeviceType = m_settings.value("halikey/deviceType", 0).toInt();
     m_halikeyPaddleSwapped = m_settings.value("halikey/paddleSwapped", false).toBool();
+    m_halikeyStraightKeyMode = m_settings.value("halikey/straightKeyMode", false).toBool();
     m_sidetoneVolume = m_settings.value("halikey/sidetoneVolume", 30).toInt();
 
     // KPOD+ keyer settings
@@ -679,6 +692,7 @@ void RadioSettings::save() {
     m_settings.setValue("halikey/enabled", m_halikeyEnabled);
     m_settings.setValue("halikey/deviceType", m_halikeyDeviceType);
     m_settings.setValue("halikey/paddleSwapped", m_halikeyPaddleSwapped);
+    m_settings.setValue("halikey/straightKeyMode", m_halikeyStraightKeyMode);
     m_settings.setValue("halikey/sidetoneVolume", m_sidetoneVolume);
 
     // KPOD+ keyer settings

@@ -68,6 +68,24 @@ CwKeyerPage::CwKeyerPage(HalikeyDevice *halikeyDevice, QWidget *parent)
             [](bool checked) { RadioSettings::instance()->setHalikeyPaddleSwapped(checked); });
     layout->addWidget(m_swapPaddlesCheck);
 
+    // DAH drives one KZD<gap>U<duration>; per element; DIT is always ignored (V1.4 can't
+    // distinguish it from the foot pedal). See CwController::handleStraightKeyEdge().
+    m_straightKeyCheck = new QCheckBox("Straight Key / Bug (bypass iambic keyer)", this);
+    m_straightKeyCheck->setStyleSheet(K4Styles::Dialog::checkBox());
+    m_straightKeyCheck->setChecked(RadioSettings::instance()->halikeyStraightKeyMode());
+    connect(m_straightKeyCheck, &QCheckBox::toggled, this,
+            [](bool checked) { RadioSettings::instance()->setHalikeyStraightKeyMode(checked); });
+    layout->addWidget(m_straightKeyCheck);
+
+    auto *straightKeyHelpLabel =
+        new QLabel("Wire your key to the DAH line (DIT is always ignored). Elements are "
+                   "sent with your actual key timing, so weighting and spacing carry "
+                   "through; the radio lags by one element.",
+                   this);
+    straightKeyHelpLabel->setWordWrap(true);
+    straightKeyHelpLabel->setStyleSheet(K4Styles::Dialog::helpText());
+    layout->addWidget(straightKeyHelpLabel);
+
     // Separator line
     auto *line = new QFrame(this);
     line->setFrameShape(QFrame::HLine);
