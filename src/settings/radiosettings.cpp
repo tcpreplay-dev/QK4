@@ -388,6 +388,57 @@ void RadioSettings::setHalikeyStraightKeyMode(bool enabled) {
     }
 }
 
+bool RadioSettings::straightKeyBufferEnabled() const {
+    return m_straightKeyBufferEnabled;
+}
+
+void RadioSettings::setStraightKeyBufferEnabled(bool enabled) {
+    if (m_straightKeyBufferEnabled != enabled) {
+        m_straightKeyBufferEnabled = enabled;
+        save();
+        emit straightKeyTimingChanged();
+    }
+}
+
+int RadioSettings::straightKeyMinWpm() const {
+    return m_straightKeyMinWpm;
+}
+
+void RadioSettings::setStraightKeyMinWpm(int wpm) {
+    wpm = qBound(5, wpm, 35);
+    if (m_straightKeyMinWpm != wpm) {
+        m_straightKeyMinWpm = wpm;
+        save();
+        emit straightKeyTimingChanged();
+    }
+}
+
+int RadioSettings::straightKeyMaxWpm() const {
+    return m_straightKeyMaxWpm;
+}
+
+void RadioSettings::setStraightKeyMaxWpm(int wpm) {
+    wpm = qBound(15, wpm, 80);
+    if (m_straightKeyMaxWpm != wpm) {
+        m_straightKeyMaxWpm = wpm;
+        save();
+        emit straightKeyTimingChanged();
+    }
+}
+
+double RadioSettings::straightKeyDahDitRatio() const {
+    return m_straightKeyDahDitRatio;
+}
+
+void RadioSettings::setStraightKeyDahDitRatio(double ratio) {
+    ratio = qBound(2.5, ratio, 5.0);
+    if (!qFuzzyCompare(m_straightKeyDahDitRatio, ratio)) {
+        m_straightKeyDahDitRatio = ratio;
+        save();
+        emit straightKeyTimingChanged();
+    }
+}
+
 int RadioSettings::sidetoneVolume() const {
     return m_sidetoneVolume;
 }
@@ -594,6 +645,10 @@ void RadioSettings::load() {
     m_halikeyPaddleSwapped = m_settings.value("halikey/paddleSwapped", false).toBool();
     m_halikeyStraightKeyMode = m_settings.value("halikey/straightKeyMode", false).toBool();
     m_sidetoneVolume = m_settings.value("halikey/sidetoneVolume", 30).toInt();
+    m_straightKeyBufferEnabled = m_settings.value("straightkey/bufferEnabled", false).toBool();
+    m_straightKeyMinWpm = m_settings.value("straightkey/minWpm", 15).toInt();
+    m_straightKeyMaxWpm = m_settings.value("straightkey/maxWpm", 35).toInt();
+    m_straightKeyDahDitRatio = m_settings.value("straightkey/dahDitRatio", 3.0).toDouble();
 
     // KPOD+ keyer settings
     m_kpodPlusEncodeMode = m_settings.value("kpodPlus/encodeMode", 0).toInt();
@@ -694,6 +749,10 @@ void RadioSettings::save() {
     m_settings.setValue("halikey/paddleSwapped", m_halikeyPaddleSwapped);
     m_settings.setValue("halikey/straightKeyMode", m_halikeyStraightKeyMode);
     m_settings.setValue("halikey/sidetoneVolume", m_sidetoneVolume);
+    m_settings.setValue("straightkey/bufferEnabled", m_straightKeyBufferEnabled);
+    m_settings.setValue("straightkey/minWpm", m_straightKeyMinWpm);
+    m_settings.setValue("straightkey/maxWpm", m_straightKeyMaxWpm);
+    m_settings.setValue("straightkey/dahDitRatio", m_straightKeyDahDitRatio);
 
     // KPOD+ keyer settings
     m_settings.setValue("kpodPlus/encodeMode", m_kpodPlusEncodeMode);
