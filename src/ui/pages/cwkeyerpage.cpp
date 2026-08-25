@@ -186,8 +186,12 @@ CwKeyerPage::CwKeyerPage(HalikeyDevice *device, HalikeyDevice *straightKeyDevice
     updateFromRadio();
 }
 
+CwKeyerPage::~CwKeyerPage() {
+    m_suppressSend = true;
+}
+
 void CwKeyerPage::updateFromRadio() {
-    m_updatingFromRadio = true;
+    m_suppressSend = true;
     // Iambic mode is null until the radio reports KP (it arrives in the RDY dump), so
     // fall back to B — the more common choice, and the K4's own default.
     const bool iambicB = m_radioState->iambicMode().isNull() || m_radioState->iambicMode() == 'B';
@@ -199,12 +203,12 @@ void CwKeyerPage::updateFromRadio() {
     const int weight = m_radioState->keyingWeight() > 0 ? m_radioState->keyingWeight() : kWeightDefault;
     m_weightSlider->setValue(weightToSlider(weight));
     m_weightValueLabel->setText(QString::number(sliderToWeight(m_weightSlider->value()) / 100.0, 'f', 2));
-    m_updatingFromRadio = false;
+    m_suppressSend = false;
 }
 
 void CwKeyerPage::sendKeyerPaddle() {
-    if (m_updatingFromRadio)
-        return; // echo from the radio, not an operator edit
+    if (m_suppressSend)
+        return;
     // KP sets iambic mode, orientation and weight in one command, so all three must go
     // together or the untouched two get clobbered — same reason buttonrowdispatcher does it.
     const QChar iambic = m_iambicBRadio->isChecked() ? 'B' : 'A';

@@ -27,6 +27,7 @@ class CwKeyerPage : public QWidget {
 public:
     CwKeyerPage(HalikeyDevice *device, HalikeyDevice *straightKeyDevice, RadioState *radioState,
                 ConnectionController *connection, QWidget *parent = nullptr);
+    ~CwKeyerPage() override;
 
     void refresh();
     void setPageVisible(bool visible);
@@ -47,7 +48,10 @@ private:
     QLabel *m_weightValueLabel = nullptr;
     QSlider *m_sidetoneVolumeSlider = nullptr;
     QLabel *m_sidetoneVolumeValueLabel = nullptr;
-    bool m_updatingFromRadio = false; // suppresses echo-driven re-sends
+    // Suppresses KP sends. Set while applying the radio's own echo (so following it doesn't
+    // bounce straight back), and latched in the destructor: tearing down the radio buttons
+    // emits toggled, and by then the connection may already be gone.
+    bool m_suppressSend = false;
 };
 
 #endif // CWKEYERPAGE_H

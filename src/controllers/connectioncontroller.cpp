@@ -47,6 +47,10 @@ ConnectionController::~ConnectionController() {
         m_ioThread->wait(2000);
     }
     delete m_tcpClient; // No parent, must delete manually
+    // Null it: Qt deletes MainWindow's children in construction order, so this controller
+    // dies before lazily-created UI (the Options dialog). A widget emitting on teardown can
+    // therefore still reach sendCAT, and a dangling pointer here crashes in QObject::thread().
+    m_tcpClient = nullptr;
 }
 
 void ConnectionController::connectToRadio(const RadioEntry &radio) {
@@ -84,10 +88,14 @@ void ConnectionController::disconnectFromRadio() {
 }
 
 void ConnectionController::sendCAT(const QString &command) {
+    if (!m_tcpClient)
+        return;
     m_tcpClient->sendCAT(command);
 }
 
 void ConnectionController::sendRawPacket(const QByteArray &packet) {
+    if (!m_tcpClient)
+        return;
     m_tcpClient->sendRaw(packet);
 }
 
