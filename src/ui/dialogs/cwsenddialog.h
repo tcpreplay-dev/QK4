@@ -10,8 +10,10 @@
 #include <QShowEvent>
 #include <QTextEdit>
 #include <QVector>
+#include <QWidget>
 
 class CwSendController;
+class RadioState;
 
 /**
  * @brief Modeless dialog for typing text to be keyed as CW on the K4, via CwSendController.
@@ -27,13 +29,14 @@ class CwSendDialog : public QDialog {
     Q_OBJECT
 
 public:
-    explicit CwSendDialog(CwSendController *controller, QWidget *parent = nullptr);
+    explicit CwSendDialog(CwSendController *controller, RadioState *radioState, QWidget *parent = nullptr);
 
     void refreshMacros();
 
 protected:
     void showEvent(QShowEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override; // Escape aborts sending instead of closing
+    bool eventFilter(QObject *watched, QEvent *event) override; // double-click-to-grab on RX panes
 
 private:
     void commitText(const QString &text);
@@ -49,15 +52,27 @@ private:
     void onMacroClicked(int slotIndex);
     void onCallsignTextChanged(const QString &text);
 
+    void appendRxText(const QString &text, bool isSubRx);
+    void updateRxPaneVisibility();
+    static bool looksLikeCallsign(const QString &word);
+    void handleRxDoubleClick(QTextEdit *pane, const QPoint &pos);
+
     CwSendController *m_controller; // not owned
+    RadioState *m_radioState;       // not owned
 
     QLineEdit *m_callsignEdit = nullptr; // station currently being worked; session-local, not persisted
     QTextEdit *m_display = nullptr;
     QLineEdit *m_input = nullptr;
     QPushButton *m_abortBtn = nullptr;
     QCheckBox *m_immediateModeCheck = nullptr;
+    QCheckBox *m_pauseSendCheck = nullptr; // while checked, typed/macro text accumulates but nothing is sent
     QLabel *m_stalledBanner = nullptr;
     QVector<QPushButton *> m_macroButtons;
+
+    QWidget *m_rxPaneContainer = nullptr; // holds legend + both RX panes; hidden when neither decode is running
+    QLabel *m_prosignLegend = nullptr;
+    QTextEdit *m_rxMainText = nullptr;
+    QTextEdit *m_rxSubText = nullptr;
 
     int m_displayLength = 0; // character offsets here must match CwSendController's own count
     bool m_stalled = false;  // blocks further typing/macros until abort() resets the dialog
