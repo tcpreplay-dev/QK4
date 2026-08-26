@@ -328,6 +328,49 @@ void RadioSettings::setMacro(const QString &functionId, const QString &label, co
     }
 }
 
+QMap<QString, MacroEntry> RadioSettings::cwMacros() const {
+    return m_cwMacros;
+}
+
+MacroEntry RadioSettings::cwMacro(const QString &functionId) const {
+    return m_cwMacros.value(functionId);
+}
+
+void RadioSettings::setCwMacro(const QString &functionId, const QString &label, const QString &text) {
+    MacroEntry entry;
+    entry.functionId = functionId;
+    entry.label = label;
+    entry.command = text;
+
+    if (text.isEmpty()) {
+        if (m_cwMacros.contains(functionId)) {
+            m_cwMacros.remove(functionId);
+            save();
+            emit cwMacrosChanged();
+        }
+    } else {
+        const bool changed = !m_cwMacros.contains(functionId) || m_cwMacros[functionId].label != label ||
+                             m_cwMacros[functionId].command != text;
+        if (changed) {
+            m_cwMacros[functionId] = entry;
+            save();
+            emit cwMacrosChanged();
+        }
+    }
+}
+
+bool RadioSettings::cwSendImmediateMode() const {
+    return m_cwSendImmediateMode;
+}
+
+void RadioSettings::setCwSendImmediateMode(bool immediate) {
+    if (m_cwSendImmediateMode != immediate) {
+        m_cwSendImmediateMode = immediate;
+        save();
+        emit cwSendImmediateModeChanged(immediate);
+    }
+}
+
 namespace {
 // QSettings group per keyer role. Historical note: both roles were once a single "halikey"
 // group, migrated forward in load().
@@ -671,6 +714,22 @@ void RadioSettings::load() {
     }
     m_settings.endArray();
 
+    // CW Send macros — own array, kept distinct from "macros" above.
+    int cwMacroCount = m_settings.beginReadArray("cwMacros");
+    m_cwMacros.clear();
+    for (int i = 0; i < cwMacroCount; ++i) {
+        m_settings.setArrayIndex(i);
+        MacroEntry entry;
+        entry.functionId = m_settings.value("functionId").toString();
+        entry.label = m_settings.value("label").toString();
+        entry.command = m_settings.value("command").toString();
+        if (!entry.functionId.isEmpty()) {
+            m_cwMacros[entry.functionId] = entry;
+        }
+    }
+    m_settings.endArray();
+    m_cwSendImmediateMode = m_settings.value("cwSend/immediateMode", false).toBool();
+
     // RX EQ Presets (4 slots)
     for (int i = 0; i < 4; ++i) {
         QString prefix = QString("rxEqPresets/%1/").arg(i);
@@ -771,6 +830,18 @@ void RadioSettings::save() {
         m_settings.setValue("command", it->command);
     }
     m_settings.endArray();
+
+    // CW Send macros — own array, kept distinct from "macros" above.
+    m_settings.beginWriteArray("cwMacros");
+    int cwI = 0;
+    for (auto it = m_cwMacros.constBegin(); it != m_cwMacros.constEnd(); ++it, ++cwI) {
+        m_settings.setArrayIndex(cwI);
+        m_settings.setValue("functionId", it->functionId);
+        m_settings.setValue("label", it->label);
+        m_settings.setValue("command", it->command);
+    }
+    m_settings.endArray();
+    m_settings.setValue("cwSend/immediateMode", m_cwSendImmediateMode);
 
     // DX Cluster settings
     m_settings.beginWriteArray("dxClusters");

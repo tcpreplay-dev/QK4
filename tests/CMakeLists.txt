@@ -216,6 +216,16 @@ target_include_directories(test_iambickeyer PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(test_iambickeyer Qt6::Core Qt6::Test)
 add_test(NAME IambicKeyerTests COMMAND test_iambickeyer)
 
+# CwSendController state machine — chunking/confirm/timeout logic, driven with synthetic
+# KY0/KY1 responses. Decoupled from ConnectionController/TcpClient by design, so no network
+# linkage is needed here.
+add_executable(test_cwsendcontroller test_cwsendcontroller.cpp
+    ${CMAKE_SOURCE_DIR}/src/controllers/cwsendcontroller.cpp
+)
+target_include_directories(test_cwsendcontroller PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_cwsendcontroller Qt6::Core Qt6::Test)
+add_test(NAME CwSendControllerTests COMMAND test_cwsendcontroller)
+
 # KPOD+ USB worker — pure-logic tests (command builders, EP02 trim, response decoder)
 add_executable(test_kpodplususbworker test_kpodplususbworker.cpp
     ${CMAKE_SOURCE_DIR}/src/hardware/kpodplususbworker.cpp

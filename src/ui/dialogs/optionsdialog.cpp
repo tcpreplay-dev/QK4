@@ -10,6 +10,7 @@
 #include "ui/pages/rigcontrolpage.h"
 #include "ui/pages/cwkeyerpage.h"
 #include "ui/pages/straightkeypage.h"
+#include "ui/pages/cwmacrospage.h"
 #include "ui/pages/kpodpage.h"
 #include "ui/pages/kpa1500page.h"
 #include "ui/pages/dxclusterpage.h"
@@ -65,6 +66,7 @@ void OptionsDialog::setupUi() {
     m_tabList->addItem("Rig Control");
     m_tabList->addItem("Keyer");
     m_tabList->addItem("Straight Key");
+    m_tabList->addItem("CW Macros");
     m_tabList->addItem("K-Pod");
     m_tabList->addItem("KPA1500");
     m_tabList->addItem("DX Cluster");
@@ -151,6 +153,10 @@ void OptionsDialog::ensurePageCreated(int index) {
                                                 m_hardwareController->keyerDevice(), this);
         page = m_straightKeyPage;
         break;
+    case PageCwMacros:
+        m_cwMacrosPage = new CwMacrosPage(this);
+        page = m_cwMacrosPage;
+        break;
     case PageKpod:
         m_kpodPage = new KpodPage(m_hardwareController->kpodDevice(), m_hardwareController->kpodPlusDevice(), this);
         page = m_kpodPage;
@@ -209,6 +215,10 @@ void OptionsDialog::refreshPage(int index) {
     case PageStraightKey:
         if (m_straightKeyPage)
             m_straightKeyPage->refresh();
+        break;
+    case PageCwMacros:
+        if (m_cwMacrosPage)
+            m_cwMacrosPage->refresh();
         break;
     case PageKpod:
         if (m_kpodPage)

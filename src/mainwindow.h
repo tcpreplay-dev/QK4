@@ -43,6 +43,8 @@ class FeatureMenuController;
 class ModePopupController;
 class HardwareController;
 class CwController;
+class CwSendController;
+class CwSendDialog;
 class DxClusterController;
 class KPA1500UiController;
 class CatServer;
@@ -194,6 +196,10 @@ private:
     // Hardware controller (owns KPOD, HaliKey, IambicKeyer, SidetoneGenerator and their threads)
     HardwareController *m_hardwareController;
     CwController *m_cwController;
+    CwSendController *m_cwSendController;
+
+    // CW Send dialog (lazy-created on first open, launched from the CW-mode BottomMenuBar button)
+    CwSendDialog *m_cwSendDialog = nullptr;
 
     // KPA1500 amplifier UI controller (owns the KPA1500Client)
     KPA1500UiController *m_kpa1500UiController;

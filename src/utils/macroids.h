@@ -28,6 +28,17 @@ const QString FnF8 = "Fn.F8";
 // Special buttons
 const QString RemAnt = "REM_ANT";
 
+// CW Send dialog macro slots (canned CW messages, distinct from the CAT-command
+// macros above — see RadioSettings::cwMacro()/setCwMacro()).
+const QString CwMacro1 = "CW.Macro1";
+const QString CwMacro2 = "CW.Macro2";
+const QString CwMacro3 = "CW.Macro3";
+const QString CwMacro4 = "CW.Macro4";
+const QString CwMacro5 = "CW.Macro5";
+const QString CwMacro6 = "CW.Macro6";
+const QString CwMacro7 = "CW.Macro7";
+const QString CwMacro8 = "CW.Macro8";
+
 // KPOD buttons (T=Tap, H=Hold)
 const QString Kpod1T = "K-pod.1T";
 const QString Kpod1H = "K-pod.1H";

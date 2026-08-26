@@ -42,6 +42,14 @@ public slots:
     void setTxActive(bool active);      // Toggle TX button inverse colors
     void setPttActive(bool active);     // Toggle PTT button inverse colors
 
+    // Relabels the far-right button PTT <-> CW and switches its click behavior. PTT is
+    // meaningless in CW (K4 is keyed via CAT, not mic audio) so the button becomes a launcher
+    // for the CW Send dialog instead. If the right-click PTT latch is engaged at the moment
+    // this flips to true, it is force-released first so the radio can't be stranded in TX
+    // with no way to drop it (mirrors CwController's V1.4 PTT-destination cleanup on mode
+    // change — same class of hazard).
+    void setCwMode(bool cwMode);
+
 signals:
     void menuClicked();
     void fnClicked();
@@ -52,6 +60,7 @@ signals:
     void txClicked();
     void pttPressed();  // PTT button pressed (start TX audio)
     void pttReleased(); // PTT button released (stop TX audio)
+    void cwSendRequested(); // CW button clicked while in CW mode — open the CW Send dialog
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
@@ -71,6 +80,7 @@ private:
     QPushButton *m_pttBtn;
 
     bool m_pttLocked = false;
+    bool m_cwMode = false;
     QTimer *m_pttLockTimer = nullptr;
 };
 
