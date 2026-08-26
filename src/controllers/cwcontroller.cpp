@@ -163,7 +163,7 @@ CwController::CwController(RadioState *radioState, ConnectionController *connect
     connect(
         m_keyer, &IambicKeyer::elementStarted, tc,
         [tc, cc](bool isDit) {
-            if (cc->isKpodPlusKeyerActive())
+            if (cc->isKpodPlusKeyerActive() || cc->isTextSendActive())
                 return;
             tc->sendCAT(isDit ? QStringLiteral("KZ.;") : QStringLiteral("KZ-;"));
         },
@@ -171,7 +171,7 @@ CwController::CwController(RadioState *radioState, ConnectionController *connect
     connect(
         m_keyer, &IambicKeyer::characterSpace, tc,
         [tc, cc]() {
-            if (cc->isKpodPlusKeyerActive())
+            if (cc->isKpodPlusKeyerActive() || cc->isTextSendActive())
                 return;
             // WHY space, not underscore: the Elecraft KPodKeyerInterface.pdf renders the
             // letter-space marker as "KZ_;" but a hexdump of EP02 traffic from a live KPOD+
@@ -185,7 +185,7 @@ CwController::CwController(RadioState *radioState, ConnectionController *connect
     connect(
         m_keyer, &IambicKeyer::restartAfterPause, tc,
         [tc, cc](int ms) {
-            if (cc->isKpodPlusKeyerActive())
+            if (cc->isKpodPlusKeyerActive() || cc->isTextSendActive())
                 return;
             tc->sendCAT(QStringLiteral("KZP%1;").arg(ms, 4, 10, QChar('0')));
         },
@@ -239,7 +239,7 @@ CwController::CwController(RadioState *radioState, ConnectionController *connect
     connect(
         m_straightKeyDevice, &HalikeyDevice::dahStateChanged, this,
         [this](bool pressed) {
-            if (kpodPlusActive())
+            if (kpodPlusActive() || m_connection->isTextSendActive())
                 return;
             // Unlike the iambic path, this emits elements directly, so it must not leak
             // into voice/data modes.

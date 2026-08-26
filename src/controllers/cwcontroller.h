@@ -99,6 +99,13 @@ class KpodPlusDevice;
 // (the iambic state machine still runs; only its KZ output and sidetone
 // playback drop). KPOD+ owns the entire chain when active.
 //
+// A second, symmetric gate — `ConnectionController::m_textSendActive`,
+// written by CwSendController's activeChanged signal — suppresses the same
+// KZ emission points (plus the straight-key element send) while a typed CW
+// message is queued/in-flight via the K4's KY text buffer, so hardware
+// keying and a text send can never interleave onto the wire. See
+// cwsendcontroller.h.
+//
 // State moved from HardwareController
 // -----------------------------------
 //   std::atomic<int> m_cachedMode

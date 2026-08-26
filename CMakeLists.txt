@@ -111,6 +111,7 @@ set(SOURCES
     src/controllers/rightsidecontroller.cpp
     src/controllers/memorybuttonscontroller.cpp
     src/controllers/cwcontroller.cpp
+    src/controllers/cwsendcontroller.cpp
     src/network/tcpclient.cpp
     src/network/protocol.cpp
     src/network/networkmetrics.cpp
@@ -166,6 +167,8 @@ set(SOURCES
     src/ui/pages/rigcontrolpage.cpp
     src/ui/pages/cwkeyerpage.cpp
     src/ui/pages/straightkeypage.cpp
+    src/ui/pages/cwmacrospage.cpp
+    src/ui/dialogs/cwsenddialog.cpp
     src/ui/widgets/keyerconnectionwidget.cpp
     src/ui/pages/kpodpage.cpp
     src/ui/pages/kpa1500page.cpp
@@ -251,6 +254,7 @@ set(HEADERS
     src/controllers/rightsidecontroller.h
     src/controllers/memorybuttonscontroller.h
     src/controllers/cwcontroller.h
+    src/controllers/cwsendcontroller.h
     src/network/tcpclient.h
     src/network/protocol.h
     src/network/networkmetrics.h
@@ -303,6 +307,8 @@ set(HEADERS
     src/ui/pages/rigcontrolpage.h
     src/ui/pages/cwkeyerpage.h
     src/ui/pages/straightkeypage.h
+    src/ui/pages/cwmacrospage.h
+    src/ui/dialogs/cwsenddialog.h
     src/ui/widgets/keyerconnectionwidget.h
     src/ui/pages/kpodpage.h
     src/ui/pages/kpa1500page.h

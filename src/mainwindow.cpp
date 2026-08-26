@@ -38,6 +38,8 @@
 #include "ui/widgets/frequencydisplaywidget.h"
 #include "controllers/audiocontroller.h"
 #include "controllers/cwcontroller.h"
+#include "controllers/cwsendcontroller.h"
+#include "ui/dialogs/cwsenddialog.h"
 #include "controllers/hardwarecontroller.h"
 #include "controllers/kpa1500uicontroller.h"
 #include "network/catserver.h"
@@ -115,6 +117,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), m_radioState(new 
             m_connectionController->sendCAT("RX;");
         m_audioController->setPttActive(false);
         m_bottomMenuBar->setPttActive(false);
+        m_cwSendController->abort();
     });
 
     setupNotificationWidget();
@@ -352,6 +355,38 @@ void MainWindow::setupHardwareController() {
 
     // Hardware-side errors (HaliKey port-open failures today) → notification overlay
     connect(m_hardwareController, &HardwareController::hardwareError, this, &MainWindow::onHardwareError);
+
+    // CwSendController types text into the K4's KY buffer instead of driving hardware — see
+    // cwsendcontroller.h. Deliberately decoupled from ConnectionController/TcpClient (it only
+    // emits sendCatRequested and expects onCatResponse/onDisconnected fed from outside), so all
+    // the wiring to the real connection lives here rather than in its constructor.
+    m_cwSendController = new CwSendController(this);
+    connect(m_cwSendController, &CwSendController::sendCatRequested, m_connectionController,
+            &ConnectionController::sendCAT);
+    connect(m_connectionController, &ConnectionController::catResponseReceived, m_cwSendController,
+            &CwSendController::onCatResponse);
+    connect(m_connectionController, &ConnectionController::connectionStateChanged, m_cwSendController,
+            [this](TcpClient::ConnectionState state) {
+                if (state == TcpClient::Disconnected)
+                    m_cwSendController->onDisconnected();
+            });
+    connect(m_radioState, &RadioState::keyerSpeedChanged, m_cwSendController, &CwSendController::setKeyerSpeed);
+    m_cwSendController->setKeyerSpeed(m_radioState->keyerSpeed());
+    m_cwSendController->setImmediateMode(RadioSettings::instance()->cwSendImmediateMode());
+    connect(RadioSettings::instance(), &RadioSettings::cwSendImmediateModeChanged, m_cwSendController,
+            &CwSendController::setImmediateMode);
+    // Suppresses hardware-driven CW (paddle/straight key) while a text send is queued/in-flight,
+    // and vice versa never happens since CwSendController only sends while nothing else is —
+    // see the gate additions in cwcontroller.cpp.
+    connect(m_cwSendController, &CwSendController::activeChanged, m_connectionController,
+            &ConnectionController::setTextSendActive);
+
+    // Prime CW-mode state now that both m_bottomMenuBar (built in setupUi(), called before
+    // this) and m_cwSendController exist — the connect() above only reacts to future
+    // transitions, not the mode already in effect at startup.
+    const bool startingInCw = (m_radioState->mode() == RadioState::CW || m_radioState->mode() == RadioState::CW_R);
+    m_bottomMenuBar->setCwMode(startingInCw);
+    m_cwSendController->setCwModeActive(startingInCw);
 }
 
 void MainWindow::setupCatServer() {
@@ -657,6 +692,27 @@ void MainWindow::setupUi() {
     connect(m_bottomMenuBar, &BottomMenuBar::pttReleased, this, [this]() {
         m_audioController->setPttActive(false);
         m_bottomMenuBar->setPttActive(false);
+    });
+
+    // PTT is meaningless in CW (K4 is keyed via CAT, not mic audio) — the same button
+    // relabels to "CW" and opens the CW Send dialog instead. m_cwSendController doesn't
+    // exist yet at this point in setupUi() (it's constructed later in
+    // setupHardwareController()) — this only registers the connection; the initial-state
+    // priming call happens there instead, once it's safe to dereference.
+    connect(m_radioState, &RadioState::modeChanged, this, [this](RadioState::Mode mode) {
+        const bool isCw = (mode == RadioState::CW || mode == RadioState::CW_R);
+        m_bottomMenuBar->setCwMode(isCw);
+        m_cwSendController->setCwModeActive(isCw);
+    });
+    connect(m_bottomMenuBar, &BottomMenuBar::cwSendRequested, this, [this]() {
+        if (!m_cwSendDialog) {
+            m_cwSendDialog = new CwSendDialog(m_cwSendController, this);
+        } else {
+            m_cwSendDialog->refreshMacros();
+        }
+        m_cwSendDialog->show();
+        m_cwSendDialog->raise();
+        m_cwSendDialog->activateWindow();
     });
 
     // WHY: no audio flush on mode/filter change. AudioEngine runs on a dedicated thread with

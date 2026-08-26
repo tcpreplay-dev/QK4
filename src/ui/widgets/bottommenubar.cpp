@@ -51,9 +51,20 @@ void BottomMenuBar::setupUi() {
     connect(m_subRxBtn, &QPushButton::clicked, this, &BottomMenuBar::subRxClicked);
     connect(m_txBtn, &QPushButton::clicked, this, &BottomMenuBar::txClicked);
 
-    // PTT uses press/release for momentary activation
-    connect(m_pttBtn, &QPushButton::pressed, this, &BottomMenuBar::pttPressed);
-    connect(m_pttBtn, &QPushButton::released, this, &BottomMenuBar::pttReleased);
+    // PTT uses press/release for momentary activation. In CW mode the same button becomes
+    // "CW" and a plain click opens the CW Send dialog instead — see setCwMode().
+    connect(m_pttBtn, &QPushButton::pressed, this, [this]() {
+        if (!m_cwMode)
+            emit pttPressed();
+    });
+    connect(m_pttBtn, &QPushButton::released, this, [this]() {
+        if (!m_cwMode)
+            emit pttReleased();
+    });
+    connect(m_pttBtn, &QPushButton::clicked, this, [this]() {
+        if (m_cwMode)
+            emit cwSendRequested();
+    });
 
     // Right-click toggle (latch) mode for PTT with 180-second safety timeout
     m_pttLockTimer = new QTimer(this);
@@ -143,8 +154,29 @@ void BottomMenuBar::setPttActive(bool active) {
     }
 }
 
+void BottomMenuBar::setCwMode(bool cwMode) {
+    if (m_cwMode == cwMode)
+        return;
+
+    if (cwMode && m_pttLocked) {
+        // The right-click PTT latch has no meaning in CW mode (there's no audio-PTT to hold),
+        // and leaving it engaged would strand the radio in TX behind a relabeled button that
+        // no longer offers a way to drop it — force-release first.
+        m_pttLocked = false;
+        m_pttLockTimer->stop();
+        setPttActive(false);
+        emit pttReleased();
+    }
+
+    m_cwMode = cwMode;
+    m_pttBtn->setText(cwMode ? "CW" : "PTT");
+    m_pttBtn->setStyleSheet(K4Styles::menuBarButton());
+}
+
 bool BottomMenuBar::eventFilter(QObject *watched, QEvent *event) {
     if (watched == m_pttBtn) {
+        if (m_cwMode)
+            return QWidget::eventFilter(watched, event); // no PTT latch concept in CW mode
         if (event->type() == QEvent::MouseButtonPress) {
             auto *me = static_cast<QMouseEvent *>(event);
             if (me->button() == Qt::RightButton) {

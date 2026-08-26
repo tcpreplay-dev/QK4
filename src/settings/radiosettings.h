@@ -107,6 +107,19 @@ public:
     MacroEntry macro(const QString &functionId) const;
     void setMacro(const QString &functionId, const QString &label, const QString &command);
 
+    // CW Send macros — canned messages for the CW Send dialog. Reuses MacroEntry (its
+    // functionId/label/command fields map onto slot-id/label/message-text cleanly) but is
+    // stored under its own QSettings array so it can never cross-contaminate the PF/Fn/K-pod
+    // CAT-command macro table above. See src/utils/macroids.h for the CwMacro1..5 slot ids.
+    QMap<QString, MacroEntry> cwMacros() const;
+    MacroEntry cwMacro(const QString &functionId) const;
+    void setCwMacro(const QString &functionId, const QString &label, const QString &text);
+
+    // CW Send dialog: whether typed characters key immediately, or only once a word is
+    // completed (space/Enter). Default false (word-complete) — see CW Send Dialog design.
+    bool cwSendImmediateMode() const;
+    void setCwSendImmediateMode(bool immediate);
+
     // Keyer device roles. Two HaliKey-class interfaces may be connected at once: a paddle
     // driving the iambic keyer, and a straight key/bug driving KZD/U elements directly.
     // Which role an input plays is now decided by the device it arrived on, replacing the
@@ -194,6 +207,8 @@ signals:
     void catServerEnabledChanged(bool enabled);
     void catServerPortChanged(quint16 port);
     void macrosChanged();
+    void cwMacrosChanged();
+    void cwSendImmediateModeChanged(bool immediate);
     // Port, device type or auto-connect changed for one role (RadioSettings::KeyerRole).
     void keyerConfigChanged(int role);
     void straightKeyTimingChanged();
@@ -237,6 +252,10 @@ private:
 
     // Macro settings
     QMap<QString, MacroEntry> m_macros;
+
+    // CW Send macros (separate from m_macros — see cwMacros() above) and mode setting.
+    QMap<QString, MacroEntry> m_cwMacros;
+    bool m_cwSendImmediateMode = false;
 
     // RX EQ Presets (4 slots)
     EqPreset m_rxEqPresets[4];

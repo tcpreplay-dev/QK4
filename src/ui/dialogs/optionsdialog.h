@@ -22,6 +22,7 @@ class RigControlPage;
 class ConnectionController;
 class CwKeyerPage;
 class StraightKeyPage;
+class CwMacrosPage;
 class KpodPage;
 class Kpa1500Page;
 class DxClusterPage;
@@ -43,6 +44,7 @@ public:
         PageRigControl,
         PageCwKeyer,
     PageStraightKey,
+        PageCwMacros,
         PageKpod,
         PageKpa1500,
         PageDxCluster,
@@ -84,6 +86,7 @@ private:
     RigControlPage *m_rigControlPage = nullptr;
     StraightKeyPage *m_straightKeyPage = nullptr;
     CwKeyerPage *m_cwKeyerPage = nullptr;
+    CwMacrosPage *m_cwMacrosPage = nullptr;
     KpodPage *m_kpodPage = nullptr;
     Kpa1500Page *m_kpa1500Page = nullptr;
     DxClusterPage *m_dxClusterPage = nullptr;
