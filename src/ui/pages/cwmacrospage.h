@@ -1,17 +1,18 @@
 #ifndef CWMACROSPAGE_H
 #define CWMACROSPAGE_H
 
-#include <QCheckBox>
 #include <QLineEdit>
 #include <QWidget>
 #include <QVector>
 
 /**
- * @brief Options page for the CW Send dialog: five canned-message macro slots (label +
- *        message text) and the persistent immediate-vs-word-complete send mode setting.
+ * @brief Options page for the CW Send dialog: eight canned-message macro slots (label +
+ *        message text, with token substitution — see CwSendDialog::expandTokens()).
  *
  * Macro editing lives here, not in the CW Send dialog itself — mirrors how the Keyer/
  * Straight Key pages hold settings for the CW Send dialog's hardware-keying counterparts.
+ * The immediate-vs-word-complete send mode toggle lives in the CW Send dialog itself
+ * instead (an operator wants that live, not buried in Options).
  */
 class CwMacrosPage : public QWidget {
     Q_OBJECT
@@ -29,7 +30,6 @@ private:
     };
 
     QVector<MacroRow> m_rows;
-    QCheckBox *m_immediateModeCheck = nullptr;
 };
 
 #endif // CWMACROSPAGE_H
