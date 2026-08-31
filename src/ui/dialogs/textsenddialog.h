@@ -72,6 +72,14 @@ private:
     void appendRxText(const QString &text, bool isSubRx);
     void updateRxPaneVisibility();
     void appendSessionDivider(const QString &label);
+    // Which pane sent text currently goes to: the transmitting VFO, same rule as everywhere else.
+    bool activeTxIsSub() const;
+    QTextEdit *activeTxPane() const;
+    int &activeTxLen();
+    // Opens a segment for the active pane if the last one is for the other pane, or if text the
+    // controller doesn't count has just been inserted.
+    void openTxSegmentIfNeeded(bool force);
+    void updateTxHeaders();
     // Repaints the A / TX / B strip from the radio's split and per-VFO modes.
     void updateVfoStrip();
     // "Type here" vs "Enter here" — the verb that actually sends depends on the pause state.
@@ -88,14 +96,25 @@ private:
     RadioState *m_radioState;       // not owned
 
     QLineEdit *m_callsignEdit = nullptr; // station currently being worked; session-local, not persisted
-    QTextEdit *m_display = nullptr;
+    // Sent text, split per transmitting VFO so it is always obvious which frequency a line went
+    // out on. Only one is ever being written to at a time — whichever VFO currently transmits.
+    QTextEdit *m_txMainText = nullptr;
+    QTextEdit *m_txSubText = nullptr;
+    QWidget *m_txPaneContainer = nullptr;
+    QLabel *m_txMainHeader = nullptr; // "Main  14.097.500"
+    QLabel *m_txSubHeader = nullptr;
     QLineEdit *m_input = nullptr;
     QPushButton *m_abortBtn = nullptr;
     QComboBox *m_sendModeCombo = nullptr; // character / word / Enter — see RadioSettings::TextSendMode
     QLabel *m_stalledBanner = nullptr;
+    QLabel *m_vfoAFreqLabel = nullptr; // flanking the strip, as the main display places them
+    QLabel *m_vfoBFreqLabel = nullptr;
     QLabel *m_vfoAModeLabel = nullptr; // mode under the A square, as on the K4's own display
     QLabel *m_vfoBModeLabel = nullptr;
     QPushButton *m_txSideBtn = nullptr; // the TX arrow; clickable only when both VFOs match
+    QLabel *m_splitLabel = nullptr;     // SPLIT ON/OFF under the arrow, as on the main display
+    QLabel *m_subBadge = nullptr;       // SUB / DIV stack right of the B square, as on the main display
+    QLabel *m_divBadge = nullptr;
     bool m_txSwitchable = false; // both VFOs in the same mode — see updateVfoStrip()
     VfoSquareWidget *m_vfoASquare = nullptr; // recolored red while this VFO is transmitting
     VfoSquareWidget *m_vfoBSquare = nullptr;
@@ -106,11 +125,22 @@ private:
     QTextEdit *m_rxMainText = nullptr;
     QTextEdit *m_rxSubText = nullptr;
 
-    int m_displayLength = 0; // character offsets here must match TextSendController's own count
-    // Session dividers are text the dialog inserts on its own, which the controller never
-    // counts. Every controller-reported offset is shifted by this to reach the right document
-    // position — see recolorRange(). Only ever grows, and only at the end of the document.
-    int m_displayOffset = 0;
+    // TextSendController reports confirmed/stalled ranges as offsets into one monotonic stream
+    // of the operator's own characters. That stream is rendered across two panes, and the
+    // dialog also inserts text of its own (session dividers) that the controller never counts,
+    // so a range can't be used as a document position directly. A segment records where each
+    // contiguous run landed: everything from controllerStart onwards went into pane isSub
+    // starting at docStart, with nothing inserted in between. A new segment opens whenever the
+    // transmitting VFO changes or a divider is inserted, which is what keeps runs contiguous.
+    struct TxSegment {
+        int controllerStart = 0;
+        bool isSub = false;
+        int docStart = 0;
+    };
+    QVector<TxSegment> m_txSegments;
+    int m_typedCount = 0;  // operator characters committed so far == the controller's offset
+    int m_txMainLen = 0;   // document length of each pane, tracked rather than queried
+    int m_txSubLen = 0;
     bool m_stalled = false; // blocks further typing/macros until abort() resets the dialog
 
     QString m_sessionLabel;          // "CW" / "AFSK" / "FSK" / "PSK"; empty until first applied

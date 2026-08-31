@@ -22,6 +22,10 @@ constexpr int SPAN_MAX = 368000;
 constexpr int SPAN_THRESHOLD_UP = 144000;
 constexpr int SPAN_THRESHOLD_DOWN = 140000;
 
+/// Format a Hz frequency the way the VFO displays do: "XX.XXX.XXX", grouped in threes from
+/// the right, with no leading zero below 10 MHz.
+QString formatFrequency(quint64 freq);
+
 /// Convert VT tuning step index (0-5) to Hz.
 /// Returns 1000 Hz for out-of-range values.
 int tuningStepToHz(int step);

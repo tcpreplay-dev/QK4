@@ -6,6 +6,25 @@
 
 namespace RadioUtils {
 
+QString formatFrequency(quint64 freq) {
+    QString freqStr = QString::number(freq);
+    while (freqStr.length() < 8)
+        freqStr.prepend('0');
+    QString formatted;
+    const int len = freqStr.length();
+    for (int i = 0; i < len; i++) {
+        formatted.append(freqStr[i]);
+        const int posFromEnd = len - i - 1;
+        if (posFromEnd > 0 && posFromEnd % 3 == 0)
+            formatted.append('.');
+    }
+    // Frequencies < 10 MHz (160m-40m) render without a leading zero.
+    if (formatted.startsWith('0'))
+        formatted = formatted.mid(1);
+    return formatted;
+}
+
+
 int tuningStepToHz(int step) {
     static const int table[] = {1, 10, 100, 1000, 10000, 100};
     return (step >= 0 && step <= 5) ? table[step] : 1000;

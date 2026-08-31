@@ -4,7 +4,8 @@
 #include "models/radiostate.h"
 #include "settings/radiosettings.h"
 #include "ui/styling/k4styles.h"
-#include "ui/widgets/vforowwidget.h" // VfoSquareWidget — same A/B squares the main display uses
+#include "ui/widgets/vforowwidget.h"
+#include "utils/radioutils.h" // VfoSquareWidget — same A/B squares the main display uses
 #include "utils/macroids.h"
 
 #include <QEvent>
@@ -51,6 +52,31 @@ QLabel *makeTag(const QString &text, const char *bgColor, QWidget *parent) {
     return tag;
 }
 
+// Frequency the way the main display renders it (FrequencyDisplayWidget::paintEvent): trailing
+// digits below the tuning-rate position in TextGray, everything else in the widget's "normal"
+// color — which SubDivIndicatorController::setVfoBDimmed swaps from TextWhite to InactiveGray
+// for VFO B while Sub RX is off. Digits and dots only, so the rich text needs no escaping.
+//
+// The trailing run is fixed at two digits here rather than tracking the tuning rate: this is a
+// readout, not a tuning control, so there is no rate cursor to indicate.
+// SUB / DIV badge styling, matching SubDivIndicatorController::badgeStyle: green with black
+// text when active, otherwise a flat disabled slab.
+QString subDivBadgeStyle(bool active) {
+    return QString("background-color: %1; color: %2; font-size: %3px; font-weight: bold; border-radius: 2px;")
+        .arg(active ? K4Styles::Colors::StatusGreen : K4Styles::Colors::DisabledBackground,
+             active ? "black" : K4Styles::Colors::LightGradientTop)
+        .arg(K4Styles::Dimensions::FontSizeNormal);
+}
+
+QString freqMarkup(quint64 freq, bool dimmed) {
+    const QString text = RadioUtils::formatFrequency(freq);
+    if (text.length() <= 2)
+        return text;
+    const char *headColor = dimmed ? K4Styles::Colors::InactiveGray : K4Styles::Colors::TextWhite;
+    return QStringLiteral("<span style='color:%1'>%2</span><span style='color:%3'>%4</span>")
+        .arg(headColor, text.left(text.length() - 2), K4Styles::Colors::TextGray, text.right(2));
+}
+
 void trimToMaxLines(QTextEdit *edit, int maxLines) {
     QTextDocument *doc = edit->document();
     int blockCount = doc->blockCount();
@@ -87,6 +113,21 @@ TextSendDialog::TextSendDialog(TextSendController *controller, RadioState *radio
     // the same picture here as on the front panel. SPLIT ON/OFF is deliberately left out —
     // the arrow already says which side is transmitting.
     auto *vfoRow = new QHBoxLayout();
+
+    auto makeFreqLabel = [this]() {
+        auto *label = new QLabel(this);
+        // Deliberately NOT the main display's FontSizeFrequency: this dialog gets resized small
+        // during a QSO, and a readout that large stops the strip fitting. The colors still come
+        // from the rich text in updateVfoStrip() rather than from here, so the last two digits
+        // are dimmed the way the main display dims them.
+        label->setStyleSheet(QString("font-size: %1px; font-weight: bold;")
+                                 .arg(K4Styles::Dimensions::FontSizePopup));
+        return label;
+    };
+    // Flanking the squares, the way the main display puts each VFO's frequency outboard of the
+    // A / TX / B group.
+    m_vfoAFreqLabel = makeFreqLabel();
+    vfoRow->addWidget(m_vfoAFreqLabel, 0, Qt::AlignVCenter);
     vfoRow->addStretch();
 
     // Geometry copied from VfoRowWidget rather than re-guessed: VfoSquareWidget fixes its own
@@ -136,22 +177,58 @@ TextSendDialog::TextSendDialog(TextSendController *controller, RadioState *radio
             emit txSideToggleRequested();
     });
     txColumn->addWidget(m_txSideBtn);
+
+    // Clicking the arrow toggles split, so the resulting state has to be visible here rather
+    // than only on the main display — especially with Sub RX off, where split is the whole
+    // difference between transmitting on A and on B. Same text, color and size the main
+    // display uses (VfoRowIndicatorController::onSplitChanged).
+    m_splitLabel = new QLabel(this);
+    m_splitLabel->setAlignment(Qt::AlignCenter);
+    m_splitLabel->setStyleSheet(QString("color: %1; font-size: %2px;")
+                                    .arg(K4Styles::Colors::AccentAmber)
+                                    .arg(K4Styles::Dimensions::FontSizeButton));
+    txColumn->addWidget(m_splitLabel);
     txColumn->addStretch();
     vfoRow->addLayout(txColumn);
 
     vfoRow->addWidget(makeVfoColumn(QStringLiteral("B"), K4Styles::Colors::VfoBGreen, m_vfoBModeLabel, m_vfoBSquare),
                       0, Qt::AlignTop);
+    // SUB / DIV stack to the right of B, 36x14 each with 4px spacing — same as VfoRowWidget.
+    auto *subDivStack = new QVBoxLayout();
+    subDivStack->setContentsMargins(0, 0, 0, 0);
+    subDivStack->setSpacing(4);
+    auto makeBadge = [this](const char *text) {
+        auto *badge = new QLabel(text, this);
+        badge->setAlignment(Qt::AlignCenter);
+        badge->setFixedSize(36, 14);
+        badge->setStyleSheet(subDivBadgeStyle(false));
+        return badge;
+    };
+    m_subBadge = makeBadge("SUB");
+    m_divBadge = makeBadge("DIV");
+    subDivStack->addWidget(m_subBadge);
+    subDivStack->addWidget(m_divBadge);
+    subDivStack->addStretch();
+    vfoRow->addSpacing(6);
+    vfoRow->addLayout(subDivStack);
+
     vfoRow->addStretch();
+    m_vfoBFreqLabel = makeFreqLabel();
+    vfoRow->addWidget(m_vfoBFreqLabel, 0, Qt::AlignVCenter);
     layout->addLayout(vfoRow);
 
     connect(m_radioState, &RadioState::transmitStateChanged, this, &TextSendDialog::updateVfoStrip);
     connect(m_radioState, &RadioState::subRxEnabledChanged, this, &TextSendDialog::updateVfoStrip);
+    connect(m_radioState, &RadioState::frequencyChanged, this, &TextSendDialog::updateVfoStrip);
+    connect(m_radioState, &RadioState::frequencyBChanged, this, &TextSendDialog::updateVfoStrip);
+    connect(m_radioState, &RadioState::diversityChanged, this, &TextSendDialog::updateVfoStrip);
     connect(m_radioState, &RadioState::splitChanged, this, &TextSendDialog::updateVfoStrip);
     connect(m_radioState, &RadioState::modeChanged, this, &TextSendDialog::updateVfoStrip);
     connect(m_radioState, &RadioState::modeBChanged, this, &TextSendDialog::updateVfoStrip);
     connect(m_radioState, &RadioState::dataSubModeChanged, this, &TextSendDialog::updateVfoStrip);
     connect(m_radioState, &RadioState::dataSubModeBChanged, this, &TextSendDialog::updateVfoStrip);
-    updateVfoStrip();
+    // NOT populated here: updateVfoStrip() also fills the TX pane headers, and those panes are
+    // built further down. The initial paint happens at the end of the constructor instead.
 
     auto *callsignRow = new QHBoxLayout();
     auto *callsignLabel = new QLabel("Working:", this); // the OTHER station's callsign, not the operator's own
@@ -230,20 +307,47 @@ TextSendDialog::TextSendDialog(TextSendController *controller, RadioState *radio
     m_stalledBanner->hide();
     layout->addWidget(m_stalledBanner);
 
-    auto *txHeaderRow = new QHBoxLayout();
-    txHeaderRow->setContentsMargins(0, 0, 0, 2);
-    txHeaderRow->setSpacing(6);
-    txHeaderRow->addWidget(makeTag(QStringLiteral("TX"), K4Styles::Colors::AccentAmber, this));
-    txHeaderRow->addStretch();
-    layout->addLayout(txHeaderRow);
+    // One sent-text pane per transmitting VFO, mirroring the RX pair above and the radio's own
+    // per-receiver TX line. Only the transmitting one is ever written to, so a line's pane is
+    // the record of which frequency it actually went out on.
+    m_txPaneContainer = new QWidget(this);
+    auto *txContainerLayout = new QVBoxLayout(m_txPaneContainer);
+    txContainerLayout->setContentsMargins(0, 0, 0, 0);
+    auto *txPaneRow = new QHBoxLayout();
 
-    m_display = new QTextEdit(this);
-    m_display->setReadOnly(true);
-    m_display->setStyleSheet(QString("QTextEdit { background-color: %1; color: %2; border: 1px solid %3; "
-                                     "font-size: 14px; padding: 6px; }")
-                                 .arg(K4Styles::Colors::DarkBackground, K4Styles::Colors::TextGray,
-                                      K4Styles::Colors::DialogBorder));
-    layout->addWidget(m_display, 1);
+    auto makeTxPane = [this](const char *borderColor, QLabel *&headerOut) {
+        auto *container = new QWidget(m_txPaneContainer);
+        auto *vbox = new QVBoxLayout(container);
+        vbox->setContentsMargins(0, 0, 0, 0);
+        auto *headerRow = new QHBoxLayout();
+        headerRow->setContentsMargins(0, 0, 0, 2);
+        headerRow->setSpacing(6);
+        headerRow->addWidget(makeTag(QStringLiteral("TX"), K4Styles::Colors::AccentAmber, container));
+        headerOut = new QLabel(container);
+        headerOut->setStyleSheet(QString("QLabel { color: %1; font-size: %2px; }")
+                                     .arg(K4Styles::Colors::TextFaded)
+                                     .arg(K4Styles::Dimensions::FontSizeMedium));
+        headerRow->addWidget(headerOut);
+        headerRow->addStretch();
+        vbox->addLayout(headerRow);
+
+        auto *edit = new QTextEdit(container);
+        edit->setReadOnly(true);
+        edit->setStyleSheet(QString("QTextEdit { background-color: %1; color: %2; border: 1px solid %3; "
+                                    "font-size: 14px; padding: 6px; }")
+                                .arg(K4Styles::Colors::DarkBackground, K4Styles::Colors::TextGray, borderColor));
+        vbox->addWidget(edit);
+        return std::make_pair(container, edit);
+    };
+
+    auto txMain = makeTxPane(K4Styles::Colors::VfoACyan, m_txMainHeader);
+    auto txSub = makeTxPane(K4Styles::Colors::VfoBGreen, m_txSubHeader);
+    m_txMainText = txMain.second;
+    m_txSubText = txSub.second;
+    txPaneRow->addWidget(txMain.first);
+    txPaneRow->addWidget(txSub.first);
+    txContainerLayout->addLayout(txPaneRow);
+    layout->addWidget(m_txPaneContainer, 1);
 
     auto *inputRow = new QHBoxLayout();
     m_input = new QLineEdit(this);
@@ -342,6 +446,8 @@ TextSendDialog::TextSendDialog(TextSendController *controller, RadioState *radio
     connect(m_radioState, &RadioState::dataSubModeChanged, this, &TextSendDialog::updateRxPaneVisibility);
     connect(m_radioState, &RadioState::dataSubModeBChanged, this, &TextSendDialog::updateRxPaneVisibility);
     connect(m_radioState, &RadioState::subRxEnabledChanged, this, &TextSendDialog::updateRxPaneVisibility);
+    connect(m_radioState, &RadioState::splitChanged, this, &TextSendDialog::updateRxPaneVisibility);
+    updateVfoStrip();
     updateRxPaneVisibility(); // decode may already be running when this dialog is first created
 
     // m_callsignEdit sits above m_input in the layout, which would otherwise steal default
@@ -426,24 +532,68 @@ void TextSendDialog::commitText(const QString &text, bool force) {
     }
 }
 
+bool TextSendDialog::activeTxIsSub() const {
+    // Split is what moves the TX VFO on the K4 — same rule the VFO strip and TxStateController
+    // use to decide which side is transmitting.
+    return m_radioState->splitEnabled();
+}
+
+QTextEdit *TextSendDialog::activeTxPane() const {
+    return activeTxIsSub() ? m_txSubText : m_txMainText;
+}
+
+int &TextSendDialog::activeTxLen() {
+    return activeTxIsSub() ? m_txSubLen : m_txMainLen;
+}
+
+void TextSendDialog::openTxSegmentIfNeeded(bool force) {
+    const bool isSub = activeTxIsSub();
+    if (!force && !m_txSegments.isEmpty() && m_txSegments.last().isSub == isSub)
+        return;
+    m_txSegments.append({m_typedCount, isSub, isSub ? m_txSubLen : m_txMainLen});
+}
+
 void TextSendDialog::appendToDisplay(QChar ch) {
-    QTextCursor cursor(m_display->document());
+    openTxSegmentIfNeeded(false);
+    QTextEdit *pane = activeTxPane();
+    QTextCursor cursor(pane->document());
     cursor.movePosition(QTextCursor::End);
     QTextCharFormat fmt;
     fmt.setForeground(QColor(K4Styles::Colors::TextGray));
     cursor.insertText(QString(ch), fmt);
-    m_displayLength++;
-    m_display->moveCursor(QTextCursor::End); // keep the newest text in view as it fills up
-    m_display->ensureCursorVisible();
+    activeTxLen()++;
+    m_typedCount++;
+    pane->moveCursor(QTextCursor::End); // keep the newest text in view as it fills up
+    pane->ensureCursorVisible();
 }
 
 void TextSendDialog::recolorRange(int start, int length, const QString &colorHex) {
-    // The controller counts only the operator's own characters; m_displayOffset covers the
-    // session dividers this dialog inserted between them.
-    const int docStart = start + m_displayOffset;
-    if (length <= 0 || start < 0 || docStart + length > m_displayLength)
+    if (length <= 0 || start < 0 || m_txSegments.isEmpty())
         return;
-    QTextCursor cursor(m_display->document());
+
+    // Find the segment this range was written into — the last one that began at or before it.
+    // A range never straddles two segments: a segment only closes when the transmitting VFO
+    // changes or a divider is inserted, and neither happens part-way through committing a
+    // chunk. A chunk queued before the TX side moved still recolors in the pane it went to,
+    // which is the correct record of where it was actually sent.
+    int index = -1;
+    for (int i = m_txSegments.size() - 1; i >= 0; --i) {
+        if (m_txSegments.at(i).controllerStart <= start) {
+            index = i;
+            break;
+        }
+    }
+    if (index < 0)
+        return;
+
+    const TxSegment &segment = m_txSegments.at(index);
+    QTextEdit *pane = segment.isSub ? m_txSubText : m_txMainText;
+    const int paneLen = segment.isSub ? m_txSubLen : m_txMainLen;
+    const int docStart = segment.docStart + (start - segment.controllerStart);
+    if (docStart < 0 || docStart + length > paneLen)
+        return;
+
+    QTextCursor cursor(pane->document());
     cursor.setPosition(docStart);
     cursor.setPosition(docStart + length, QTextCursor::KeepAnchor);
     QTextCharFormat fmt;
@@ -544,8 +694,8 @@ void TextSendDialog::onMacroClicked(int slotIndex) {
     // Leading edge: if there's a typed prefix starting fresh right after an unrelated prior
     // send (e.g. a macro that already went out and cleared m_input) with nothing to naturally
     // separate them, that prefix needs its own leading space before it touches the old text.
-    if (!typed.isEmpty() && m_displayLength > 0) {
-        const QChar lastDisplayChar = m_display->toPlainText().back();
+    if (!typed.isEmpty() && activeTxLen() > 0) {
+        const QChar lastDisplayChar = activeTxPane()->toPlainText().back();
         if (!lastDisplayChar.isSpace() && !typed.front().isSpace())
             combined += QChar(' ');
     }
@@ -559,8 +709,8 @@ void TextSendDialog::onMacroClicked(int slotIndex) {
     QChar lastSentChar;
     if (!combined.isEmpty())
         lastSentChar = combined.back();
-    else if (m_displayLength > 0)
-        lastSentChar = m_display->toPlainText().back();
+    else if (activeTxLen() > 0)
+        lastSentChar = activeTxPane()->toPlainText().back();
 
     if (!lastSentChar.isNull() && !lastSentChar.isSpace())
         combined += QChar(' ');
@@ -672,6 +822,17 @@ void TextSendDialog::updateVfoStrip() {
     const QString modeB = m_radioState->modeStringFullB();
     m_vfoAModeLabel->setText(modeA);
     m_vfoBModeLabel->setText(modeB);
+    // VFO B goes dim with Sub RX off, frequency and mode label together — same as the main
+    // display, which dims both in setVfoBDimmed(). VFO A is never dimmed.
+    const bool dimB = !m_radioState->subRxEnabled();
+    m_subBadge->setStyleSheet(subDivBadgeStyle(m_radioState->subRxEnabled()));
+    m_divBadge->setStyleSheet(subDivBadgeStyle(m_radioState->diversityEnabled()));
+    m_vfoAFreqLabel->setText(freqMarkup(m_radioState->vfoA(), false));
+    m_vfoBFreqLabel->setText(freqMarkup(m_radioState->vfoB(), dimB));
+    m_vfoBModeLabel->setStyleSheet(QString("color: %1; font-size: %2px; font-weight: bold;")
+                                       .arg(dimB ? K4Styles::Colors::InactiveGray : K4Styles::Colors::TextWhite)
+                                       .arg(K4Styles::Dimensions::FontSizeLarge));
+    updateTxHeaders(); // the TX arrow and the sent-pane headers name the same VFO
 
     // Split is what moves the TX VFO on the K4: off = transmit on A, on = transmit on B. The
     // arrow points at whichever side is live, same as the front panel's.
@@ -679,6 +840,7 @@ void TextSendDialog::updateVfoStrip() {
     // the way the front panel's two triangles flank a stationary TX label.
     const bool txOnB = m_radioState->splitEnabled();
     m_txSideBtn->setText(txOnB ? QStringLiteral("TX ▶") : QStringLiteral("◀ TX"));
+    m_splitLabel->setText(txOnB ? QStringLiteral("SPLIT ON") : QStringLiteral("SPLIT OFF"));
 
     // While the radio is actually keyed, the transmitting VFO's square goes red — the same
     // TxRed the main display already flips its TX indicator to (TxStateController). The other
@@ -691,11 +853,10 @@ void TextSendDialog::updateVfoStrip() {
     // Only offer the switch when both VFOs are in the same mode — including the DATA sub-mode,
     // which is why this compares the full mode strings rather than mode() alone. Flipping TX
     // onto a VFO in a different mode would silently change what the radio transmits.
-    // Sub RX has to be on as well as the modes matching. With it off there is only one
-    // receiver in play, so there is nothing to move TX between as far as this dialog is
-    // concerned — the general split case (RX on A, TX on B, Sub RX off) is the main window's
-    // SPLIT button, not a text-conversation control.
-    m_txSwitchable = (modeA == modeB) && !modeA.isEmpty() && m_radioState->subRxEnabled();
+    // Only the modes have to match. Sub RX is deliberately NOT required: transmitting on B while
+    // receiving on A with Sub RX off is ordinary split operation, not an edge case, and the
+    // operator wants to reach it from here rather than the main window's SPLIT button.
+    m_txSwitchable = (modeA == modeB) && !modeA.isEmpty();
     // Deliberately NOT setEnabled(false) when it can't be switched: Qt's disabled palette
     // greyed the label out, which fought the one job this indicator has — reading the same as
     // the main display's TX indicator, amber on receive and TxRed while keyed. The button stays
@@ -704,7 +865,7 @@ void TextSendDialog::updateVfoStrip() {
     m_txSideBtn->setCursor(m_txSwitchable ? Qt::PointingHandCursor : Qt::ArrowCursor);
     m_txSideBtn->setToolTip(m_txSwitchable
                                 ? QStringLiteral("Switch which VFO transmits")
-                                : QStringLiteral("Needs Sub RX on and both VFOs in the same mode"));
+                                : QStringLiteral("Both VFOs must be in the same mode to switch TX sides"));
     // Same color rule and FontSizeIndicator as TxStateController uses for the main display's
     // TX label and triangles.
     m_txSideBtn->setStyleSheet(
@@ -715,24 +876,27 @@ void TextSendDialog::updateVfoStrip() {
 }
 
 void TextSendDialog::appendSessionDivider(const QString &label) {
-    if (m_displayLength == 0)
+    QTextEdit *pane = activeTxPane();
+    if (activeTxLen() == 0)
         return; // nothing above it to separate
 
+    // The history is deliberately NOT cleared on a mode switch: TextSendController's own
+    // character offsets are monotonic and survive its reset (see resetAll()), so wiping a pane
+    // would silently desync every later recolor.
     const QString divider = QStringLiteral("\n--- %1 ---\n").arg(label);
-    QTextCursor cursor(m_display->document());
+    QTextCursor cursor(pane->document());
     cursor.movePosition(QTextCursor::End);
     QTextCharFormat fmt;
     fmt.setForeground(QColor(K4Styles::Colors::TextFaded));
     cursor.insertText(divider, fmt);
+    activeTxLen() += divider.length();
 
-    // The history is deliberately NOT cleared on a mode switch: TextSendController's own
-    // character offsets are monotonic and survive its reset (see resetAll()), so wiping the
-    // display would silently desync every later recolor. A divider keeps both sides honest —
-    // as long as the extra characters are accounted for here and in recolorRange().
-    m_displayLength += divider.length();
-    m_displayOffset += divider.length();
-    m_display->moveCursor(QTextCursor::End);
-    m_display->ensureCursorVisible();
+    // These characters are the dialog's own — the controller never counted them — so the
+    // current segment has to end here and a fresh one start after them.
+    openTxSegmentIfNeeded(true);
+
+    pane->moveCursor(QTextCursor::End);
+    pane->ensureCursorVisible();
 }
 
 void TextSendDialog::updateRxPaneVisibility() {
@@ -741,13 +905,7 @@ void TextSendDialog::updateRxPaneVisibility() {
     // that is switched off entirely — has nothing to do with the conversation being typed
     // into this dialog, and showing its stale pane just reads as a bug.
     const TextSendController::SessionMode session = m_controller->sessionMode();
-    auto decodingThisSession = [session](RadioState::Mode mode, int dataSubMode, int decodeMode) {
-        // != 0, not > 0: 0 is a decoder the radio explicitly told us is off. -1 means it has
-        // never told us anything — and since entering FSK turns the decoder on (see
-        // TextDecodeController::applyFskAutoDecode) and re-asks, "unknown" here means
-        // "asked for, answer pending", not "off".
-        if (decodeMode == 0)
-            return false;
+    auto inThisSession = [session](RadioState::Mode mode, int dataSubMode) {
         switch (session) {
         case TextSendController::SessionMode::Cw:
             return mode == RadioState::CW || mode == RadioState::CW_R;
@@ -759,15 +917,46 @@ void TextSendDialog::updateRxPaneVisibility() {
         return false;
     };
 
-    const bool mainOn =
-        decodingThisSession(m_radioState->mode(), m_radioState->dataSubMode(), m_radioState->textDecodeMode());
-    const bool subOn =
-        m_radioState->subRxEnabled() &&
-        decodingThisSession(m_radioState->modeB(), m_radioState->dataSubModeB(), m_radioState->textDecodeModeB());
+    // != 0, not > 0, on the decoder: 0 is a decoder the radio explicitly told us is off. -1
+    // means it has never told us anything — and since entering FSK turns the decoder on (see
+    // TextDecodeController::applyFskAutoDecode) and re-asks, "unknown" means "asked for,
+    // answer pending", not "off".
+    const bool mainOn = m_radioState->textDecodeMode() != 0 &&
+                        inThisSession(m_radioState->mode(), m_radioState->dataSubMode());
+    const bool subOn = m_radioState->subRxEnabled() && m_radioState->textDecodeModeB() != 0 &&
+                       inThisSession(m_radioState->modeB(), m_radioState->dataSubModeB());
 
     m_rxMainText->parentWidget()->setVisible(mainOn);
     m_rxSubText->parentWidget()->setVisible(subOn);
     m_rxPaneContainer->setVisible(mainOn || subOn);
+
+    // The sent-text panes follow the same rule, minus the decoder: a receiver that isn't in
+    // this session's mode (or a Sub RX that's switched off) can't be transmitted on either.
+    // Main is always shown — there is always somewhere to look for what was sent, and VFO A is
+    // the default TX side. Sub appears once it is genuinely a place text can go: split puts TX
+    // on B whether or not Sub RX is on, so this must not key off Sub RX alone or text sent on B
+    // would land in a hidden pane. It also stays up while it still holds history.
+    const bool txSubOn = inThisSession(m_radioState->modeB(), m_radioState->dataSubModeB()) &&
+                         (m_radioState->splitEnabled() || m_radioState->subRxEnabled() || m_txSubLen > 0);
+    m_txSubText->parentWidget()->setVisible(txSubOn);
+    updateTxHeaders();
+}
+
+void TextSendDialog::updateTxHeaders() {
+    // Reached from updateVfoStrip(), which is wired to RadioState signals during construction —
+    // so it can fire before the TX panes further down the constructor exist.
+    if (!m_txMainHeader || !m_txSubHeader)
+        return;
+
+    // Frequency, so a line in the log is tied to where it actually went out. The arrow marks
+    // whichever pane is live now.
+    const bool subIsTx = activeTxIsSub();
+    m_txMainHeader->setText(QStringLiteral("%1Main  %2")
+                                .arg(subIsTx ? QString() : QStringLiteral("\u25C0 "),
+                                     RadioUtils::formatFrequency(m_radioState->vfoA())));
+    m_txSubHeader->setText(QStringLiteral("%1Sub  %2")
+                               .arg(subIsTx ? QStringLiteral("\u25C0 ") : QString(),
+                                    RadioUtils::formatFrequency(m_radioState->vfoB())));
 }
 
 bool TextSendDialog::looksLikeCallsign(const QString &word) {
