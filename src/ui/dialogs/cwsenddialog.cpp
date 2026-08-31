@@ -1,14 +1,21 @@
 #include "ui/dialogs/cwsenddialog.h"
 
 #include "controllers/cwsendcontroller.h"
+#include "models/radiostate.h"
 #include "settings/radiosettings.h"
 #include "ui/styling/k4styles.h"
 #include "utils/macroids.h"
 
+#include <QEvent>
+#include <QFont>
 #include <QHBoxLayout>
+#include <QMouseEvent>
+#include <QRegularExpression>
 #include <QShortcut>
 #include <QTextCursor>
 #include <QVBoxLayout>
+
+#include <utility>
 
 namespace {
 const QVector<QString> kSlotIds = {MacroIds::CwMacro1, MacroIds::CwMacro2, MacroIds::CwMacro3, MacroIds::CwMacro4,
@@ -16,13 +23,34 @@ const QVector<QString> kSlotIds = {MacroIds::CwMacro1, MacroIds::CwMacro2, Macro
 
 const Qt::Key kSlotKeys[] = {Qt::Key_F1, Qt::Key_F2, Qt::Key_F3, Qt::Key_F4,
                              Qt::Key_F5, Qt::Key_F6, Qt::Key_F7, Qt::Key_F8};
+
+const int kRxPaneMaxLines = 10;
+
+// K4 CW decoder prosign punctuation (see legend label for what each means) — kept as the
+// original character but colored/bolded to stand out; replacing it with the two-letter name
+// inline read as clutter jammed against surrounding decoded text.
+const QString kProsignChars = QStringLiteral("(+=%*!");
+
+void trimToMaxLines(QTextEdit *edit, int maxLines) {
+    QTextDocument *doc = edit->document();
+    int blockCount = doc->blockCount();
+    if (blockCount > maxLines) {
+        QTextCursor cursor(doc);
+        cursor.movePosition(QTextCursor::Start);
+        for (int i = 0; i < blockCount - maxLines; ++i) {
+            cursor.movePosition(QTextCursor::EndOfBlock, QTextCursor::KeepAnchor);
+            cursor.movePosition(QTextCursor::NextBlock, QTextCursor::KeepAnchor);
+        }
+        cursor.removeSelectedText();
+    }
+}
 }
 
-CwSendDialog::CwSendDialog(CwSendController *controller, QWidget *parent)
-    : QDialog(parent), m_controller(controller) {
+CwSendDialog::CwSendDialog(CwSendController *controller, RadioState *radioState, QWidget *parent)
+    : QDialog(parent), m_controller(controller), m_radioState(radioState) {
     setWindowTitle("CW Send");
     setWindowModality(Qt::NonModal);
-    resize(560, 400);
+    resize(760, 460);
 
     setStyleSheet(QString("QDialog { background-color: %1; }").arg(K4Styles::Colors::Background));
 
@@ -31,17 +59,65 @@ CwSendDialog::CwSendDialog(CwSendController *controller, QWidget *parent)
                                K4Styles::Dimensions::DialogMargin, K4Styles::Dimensions::DialogMargin);
 
     auto *callsignRow = new QHBoxLayout();
-    auto *callsignLabel = new QLabel("Callsign:", this);
+    auto *callsignLabel = new QLabel("Working:", this); // the OTHER station's callsign, not the operator's own
     callsignLabel->setStyleSheet(K4Styles::Dialog::formLabel());
     callsignRow->addWidget(callsignLabel);
     m_callsignEdit = new QLineEdit(this);
-    m_callsignEdit->setPlaceholderText("Working...");
+    m_callsignEdit->setPlaceholderText("Their call...");
     m_callsignEdit->setStyleSheet(K4Styles::Dialog::lineEdit());
     m_callsignEdit->setMaximumWidth(120);
     connect(m_callsignEdit, &QLineEdit::textChanged, this, &CwSendDialog::onCallsignTextChanged);
     callsignRow->addWidget(m_callsignEdit);
     callsignRow->addStretch();
     layout->addLayout(callsignRow);
+
+    m_rxPaneContainer = new QWidget(this);
+    auto *rxContainerLayout = new QVBoxLayout(m_rxPaneContainer);
+    rxContainerLayout->setContentsMargins(0, 0, 0, 0);
+
+    auto *rxPaneRow = new QHBoxLayout();
+    auto makeRxPane = [this](const char *labelText, const char *borderColor) {
+        auto *container = new QWidget(m_rxPaneContainer);
+        auto *vbox = new QVBoxLayout(container);
+        vbox->setContentsMargins(0, 0, 0, 0);
+        auto *label = new QLabel(labelText, container);
+        label->setStyleSheet(QString("QLabel { color: %1; font-weight: bold; }").arg(borderColor));
+        vbox->addWidget(label);
+        auto *edit = new QTextEdit(container);
+        edit->setReadOnly(true);
+        edit->setFocusPolicy(Qt::NoFocus);
+        // No mouse-drag selection here — arriving decoded text keeps moving the cursor to the
+        // end, which would otherwise silently wipe out whatever the operator just selected.
+        // Double-click-to-grab (handleRxDoubleClick) sets its own transient selection instead.
+        edit->setTextInteractionFlags(Qt::NoTextInteraction);
+        edit->setFixedHeight(80);
+        edit->setStyleSheet(QString("QTextEdit { background-color: %1; color: %2; border: 1px solid %3; "
+                                    "font-size: 13px; padding: 4px; }")
+                                .arg(K4Styles::Colors::DarkBackground, K4Styles::Colors::TextGray, borderColor));
+        vbox->addWidget(edit);
+        return std::make_pair(container, edit);
+    };
+
+    auto mainPane = makeRxPane("RX Main", K4Styles::Colors::VfoACyan);
+    auto subPane = makeRxPane("RX Sub", K4Styles::Colors::VfoBGreen);
+    m_rxMainText = mainPane.second;
+    m_rxSubText = subPane.second;
+    rxPaneRow->addWidget(mainPane.first);
+    rxPaneRow->addWidget(subPane.first);
+    rxContainerLayout->addLayout(rxPaneRow);
+
+    m_prosignLegend = new QLabel("( KN   + AR   = BT   % AS   * SK   ! VE", m_rxPaneContainer);
+    m_prosignLegend->setStyleSheet(
+        QString("QLabel { color: %1; font-family: monospace; }").arg(K4Styles::Colors::TextFaded));
+    rxContainerLayout->addWidget(m_prosignLegend);
+
+    // QTextEdit delivers mouse events to its internal viewport widget, not to the QTextEdit
+    // object itself — installing the filter on the widget directly means it never sees clicks.
+    m_rxMainText->viewport()->installEventFilter(this);
+    m_rxSubText->viewport()->installEventFilter(this);
+
+    layout->addWidget(m_rxPaneContainer);
+    m_rxPaneContainer->hide();
 
     m_stalledBanner = new QLabel(this);
     m_stalledBanner->setWordWrap(true);
@@ -59,10 +135,17 @@ CwSendDialog::CwSendDialog(CwSendController *controller, QWidget *parent)
                                       K4Styles::Colors::DialogBorder));
     layout->addWidget(m_display, 1);
 
+    auto *inputRow = new QHBoxLayout();
     m_input = new QLineEdit(this);
     m_input->setPlaceholderText("Type here to send CW...");
     m_input->setStyleSheet(K4Styles::Dialog::lineEdit());
-    layout->addWidget(m_input);
+    inputRow->addWidget(m_input, 1);
+    auto *clearInputBtn = new QPushButton("Clear", this);
+    clearInputBtn->setStyleSheet(K4Styles::menuBarButton());
+    clearInputBtn->setAutoDefault(false); // same Enter-in-lineedit gotcha as the macro buttons
+    connect(clearInputBtn, &QPushButton::clicked, this, [this]() { m_input->clear(); });
+    inputRow->addWidget(clearInputBtn);
+    layout->addLayout(inputRow);
 
     auto *macroRow1 = new QHBoxLayout();
     auto *macroRow2 = new QHBoxLayout();
@@ -90,6 +173,14 @@ CwSendDialog::CwSendDialog(CwSendController *controller, QWidget *parent)
     connect(m_immediateModeCheck, &QCheckBox::toggled, this,
             [](bool checked) { RadioSettings::instance()->setCwSendImmediateMode(checked); });
     bottomRow->addWidget(m_immediateModeCheck);
+    m_pauseSendCheck = new QCheckBox("Pause sending", this);
+    m_pauseSendCheck->setStyleSheet(K4Styles::Dialog::checkBox());
+    // Uncheck = "away it goes": send whatever accumulated in m_input while paused, as one chunk.
+    connect(m_pauseSendCheck, &QCheckBox::toggled, this, [this](bool checked) {
+        if (!checked)
+            finishPendingWord();
+    });
+    bottomRow->addWidget(m_pauseSendCheck);
     bottomRow->addStretch();
     m_abortBtn = new QPushButton("Abort (Esc)", this);
     m_abortBtn->setStyleSheet(QString("QPushButton { background-color: %1; color: %2; font-weight: bold; "
@@ -116,9 +207,20 @@ CwSendDialog::CwSendDialog(CwSendController *controller, QWidget *parent)
     });
     connect(m_controller, &CwSendController::aborted, this, &CwSendDialog::onAborted);
 
+    // Without this, editing a macro in Options -> CW Macros while this dialog stays open
+    // leaves the F1-F8 buttons showing stale labels/tooltips until the dialog is closed and
+    // reopened (refreshMacros() was only ever called at construction and on reopen).
+    connect(RadioSettings::instance(), &RadioSettings::cwMacrosChanged, this, &CwSendDialog::refreshMacros);
+
+    connect(m_radioState, &RadioState::textBufferReceived, this,
+            [this](const QString &text, bool isSubRx) { appendRxText(text, isSubRx); });
+    connect(m_radioState, &RadioState::textDecodeChanged, this, &CwSendDialog::updateRxPaneVisibility);
+    connect(m_radioState, &RadioState::textDecodeBChanged, this, &CwSendDialog::updateRxPaneVisibility);
+    updateRxPaneVisibility(); // decode may already be running when this dialog is first created
+
     // m_callsignEdit sits above m_input in the layout, which would otherwise steal default
     // focus — the operator opening this dialog and typing immediately expects it to go to CW,
-    // not the callsign box.
+    // not the callsign box. The RX panes are QTextEdit::NoFocus so they never enter tab order.
     setTabOrder(m_callsignEdit, m_input);
 
     refreshMacros();
@@ -188,6 +290,8 @@ void CwSendDialog::commitText(const QString &text) {
     if (m_stalled)
         return; // controller already ignores appendChar() while stalled — don't echo grey
                 // text the K4 will never actually see
+    if (m_pauseSendCheck->isChecked())
+        return; // typed/macro text stays visible in m_input only, until "Pause sending" is unchecked
     for (const QChar &ch : text) {
         appendToDisplay(ch);
         m_controller->appendChar(ch);
@@ -201,6 +305,8 @@ void CwSendDialog::appendToDisplay(QChar ch) {
     fmt.setForeground(QColor(K4Styles::Colors::TextGray));
     cursor.insertText(QString(ch), fmt);
     m_displayLength++;
+    m_display->moveCursor(QTextCursor::End); // keep the newest text in view as it fills up
+    m_display->ensureCursorVisible();
 }
 
 void CwSendDialog::recolorRange(int start, int length, const QString &colorHex) {
@@ -226,6 +332,8 @@ void CwSendDialog::onAborted() {
 }
 
 void CwSendDialog::finishPendingWord() {
+    if (m_pauseSendCheck->isChecked())
+        return; // don't send or discard while paused — the composed reply stays in m_input
     const QString remaining = m_input->text();
     if (!remaining.isEmpty()) {
         commitText(remaining);
@@ -235,9 +343,21 @@ void CwSendDialog::finishPendingWord() {
 }
 
 void CwSendDialog::onInputTextEdited(const QString &text) {
+    // CW has no case of its own — force uppercase as typed so the sent-text display doesn't mix
+    // case with macro text (which is stored/sent as typed by the operator, normally uppercase).
+    const QString upper = text.toUpper();
+    if (upper != text) {
+        m_input->blockSignals(true);
+        m_input->setText(upper);
+        m_input->blockSignals(false);
+    }
+
+    if (m_pauseSendCheck->isChecked())
+        return; // let the field accumulate normally; nothing is sent until unpaused
+
     if (m_controller->immediateMode()) {
         // Every keystroke commits right away — the field never actually accumulates.
-        commitText(text);
+        commitText(upper);
         m_input->blockSignals(true);
         m_input->clear();
         m_input->blockSignals(false);
@@ -246,12 +366,12 @@ void CwSendDialog::onInputTextEdited(const QString &text) {
 
     // Word-complete: commit any complete (space-terminated) prefix, leave the rest editable
     // (including normal backspacing of a not-yet-committed word).
-    const int lastSpace = text.lastIndexOf(QChar(' '));
+    const int lastSpace = upper.lastIndexOf(QChar(' '));
     if (lastSpace < 0)
         return;
 
-    const QString toCommit = text.left(lastSpace + 1);
-    const QString remainder = text.mid(lastSpace + 1);
+    const QString toCommit = upper.left(lastSpace + 1);
+    const QString remainder = upper.mid(lastSpace + 1);
     commitText(toCommit);
     m_input->blockSignals(true);
     m_input->setText(remainder);
@@ -263,25 +383,120 @@ void CwSendDialog::onReturnPressed() {
 }
 
 void CwSendDialog::onMacroClicked(int slotIndex) {
-    // Finish whatever's mid-typing first so macro text doesn't interleave into a partial word.
-    finishPendingWord();
-
     const MacroEntry entry = RadioSettings::instance()->cwMacro(kSlotIds[slotIndex]);
     if (entry.command.isEmpty())
-        return;
+        return; // unassigned slot — leave whatever's typed (but not yet sent) untouched
 
     const QString expanded = expandTokens(entry.command);
     if (expanded.isEmpty()) // e.g. a macro that's just "*" with an empty Callsign field
         return;
 
-    // Macro text doesn't carry its own leading space, so back-to-back macro clicks (or a
-    // macro right after manually typed text) would otherwise run together with no word gap.
-    if (m_displayLength > 0) {
-        const QString existing = m_display->toPlainText();
-        if (!existing.isEmpty() && !existing.back().isSpace())
-            commitText(QStringLiteral(" "));
-    }
+    // Merge onto whatever's already typed but not yet sent (e.g. the remote station's
+    // callsign, typed with "Send immediately" off so it doesn't go out on its own) so a macro
+    // key appends canned text and sends the whole line as one chunk — "K1ABC" + F1 mapped to
+    // "DE VE7VT" keys "K1ABC DE VE7VT" together, not as two separate transmissions.
+    const QString typed = m_input->text();
+    QString combined;
 
-    commitText(expanded);
-    m_controller->flush(); // dispatch a trailing partial word if the macro doesn't end in a space
+    // Leading edge: if there's a typed prefix starting fresh right after an unrelated prior
+    // send (e.g. a macro that already went out and cleared m_input) with nothing to naturally
+    // separate them, that prefix needs its own leading space before it touches the old text.
+    if (!typed.isEmpty() && m_displayLength > 0) {
+        const QChar lastDisplayChar = m_display->toPlainText().back();
+        if (!lastDisplayChar.isSpace() && !typed.front().isSpace())
+            combined += QChar(' ');
+    }
+    combined += typed;
+
+    // Trailing edge: separate the typed prefix (or, if there wasn't one, whatever was last
+    // sent) from this macro's own text. Has to look past an empty typed prefix too —
+    // back-to-back macro clicks each start from an empty input box since the prior click's
+    // finishPendingWord() already cleared it — so with no fallback here, "DE" then "VE7VT"
+    // clicked in a row would run together as "DEVE7VT" in what's actually sent.
+    QChar lastSentChar;
+    if (!combined.isEmpty())
+        lastSentChar = combined.back();
+    else if (m_displayLength > 0)
+        lastSentChar = m_display->toPlainText().back();
+
+    if (!lastSentChar.isNull() && !lastSentChar.isSpace())
+        combined += QChar(' ');
+    combined += expanded;
+
+    m_input->blockSignals(true);
+    m_input->setText(combined);
+    m_input->blockSignals(false);
+
+    finishPendingWord(); // commits + sends the merged text, then clears m_input
+}
+
+void CwSendDialog::appendRxText(const QString &text, bool isSubRx) {
+    QTextEdit *pane = isSubRx ? m_rxSubText : m_rxMainText;
+
+    QTextCursor cursor(pane->document());
+    cursor.movePosition(QTextCursor::End);
+    for (const QChar &ch : text) {
+        QTextCharFormat fmt;
+        if (kProsignChars.contains(ch)) {
+            fmt.setForeground(QColor(K4Styles::Colors::AccentAmber));
+            fmt.setFontWeight(QFont::Bold);
+        } else {
+            fmt.setForeground(QColor(K4Styles::Colors::TextGray));
+        }
+        cursor.insertText(QString(ch), fmt);
+    }
+    pane->moveCursor(QTextCursor::End);
+    trimToMaxLines(pane, kRxPaneMaxLines);
+}
+
+void CwSendDialog::updateRxPaneVisibility() {
+    const bool mainOn = m_radioState->textDecodeMode() != 0;
+    const bool subOn = m_radioState->textDecodeModeB() != 0;
+    m_rxMainText->parentWidget()->setVisible(mainOn);
+    m_rxSubText->parentWidget()->setVisible(subOn);
+    m_rxPaneContainer->setVisible(mainOn || subOn);
+}
+
+bool CwSendDialog::looksLikeCallsign(const QString &word) {
+    // Permissive convenience filter, not a strict validator — just enough to skip obvious
+    // decode noise (stray letters, prosign fragments) when double-clicking RX text.
+    static const QRegularExpression callsignPattern(QStringLiteral("^[A-Z0-9]{1,3}[0-9][A-Z0-9]{0,4}[A-Z]$"));
+    QString stripped = word.toUpper();
+    const int slash = stripped.indexOf(QChar('/'));
+    if (slash >= 0)
+        stripped = stripped.left(slash);
+    return callsignPattern.match(stripped).hasMatch();
+}
+
+void CwSendDialog::handleRxDoubleClick(QTextEdit *pane, const QPoint &pos) {
+    QTextCursor cursor = pane->cursorForPosition(pos);
+    cursor.select(QTextCursor::WordUnderCursor);
+    const QString word = cursor.selectedText();
+
+    // Qt::NoTextInteraction (set on this pane so incoming decoded text can't wipe a native
+    // drag-selection) also disables rendering of a plain textCursor selection, so give visible
+    // feedback via an actual format change on the word instead of relying on cursor selection.
+    QTextCharFormat highlightFmt;
+    highlightFmt.setBackground(QColor(K4Styles::Colors::AccentAmber));
+    highlightFmt.setForeground(QColor(K4Styles::Colors::DarkBackground));
+    cursor.mergeCharFormat(highlightFmt);
+
+    if (looksLikeCallsign(word))
+        m_callsignEdit->setText(word.toUpper());
+}
+
+bool CwSendDialog::eventFilter(QObject *watched, QEvent *event) {
+    if (event->type() == QEvent::MouseButtonDblClick) {
+        QTextEdit *pane = nullptr;
+        if (watched == m_rxMainText->viewport())
+            pane = m_rxMainText;
+        else if (watched == m_rxSubText->viewport())
+            pane = m_rxSubText;
+        if (pane) {
+            auto *mouseEvent = static_cast<QMouseEvent *>(event);
+            handleRxDoubleClick(pane, mouseEvent->pos());
+            return true;
+        }
+    }
+    return QDialog::eventFilter(watched, event);
 }

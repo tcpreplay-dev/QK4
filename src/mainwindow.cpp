@@ -706,7 +706,7 @@ void MainWindow::setupUi() {
     });
     connect(m_bottomMenuBar, &BottomMenuBar::cwSendRequested, this, [this]() {
         if (!m_cwSendDialog) {
-            m_cwSendDialog = new CwSendDialog(m_cwSendController, this);
+            m_cwSendDialog = new CwSendDialog(m_cwSendController, m_radioState, this);
         } else {
             m_cwSendDialog->refreshMacros();
         }
