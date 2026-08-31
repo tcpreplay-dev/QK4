@@ -1,4 +1,4 @@
-#include "ui/pages/cwmacrospage.h"
+#include "ui/pages/txmacrospage.h"
 
 #include "settings/radiosettings.h"
 #include "ui/styling/k4styles.h"
@@ -13,7 +13,7 @@ const QVector<QString> kSlotIds = {MacroIds::CwMacro1, MacroIds::CwMacro2, Macro
                                    MacroIds::CwMacro5, MacroIds::CwMacro6, MacroIds::CwMacro7, MacroIds::CwMacro8};
 } // namespace
 
-CwMacrosPage::CwMacrosPage(QWidget *parent) : QWidget(parent) {
+TxMacrosPage::TxMacrosPage(QWidget *parent) : QWidget(parent) {
     setStyleSheet(K4Styles::Dialog::pageBackground());
 
     auto *layout = new QVBoxLayout(this);
@@ -21,11 +21,11 @@ CwMacrosPage::CwMacrosPage(QWidget *parent) : QWidget(parent) {
                                K4Styles::Dimensions::DialogMargin, K4Styles::Dimensions::DialogMargin);
     layout->setSpacing(K4Styles::Dimensions::PaddingLarge);
 
-    auto *title = new QLabel("CW Macros", this);
+    auto *title = new QLabel("TX Macros", this);
     title->setStyleSheet(K4Styles::Dialog::titleLabel());
     layout->addWidget(title);
 
-    auto *desc = new QLabel("Macro buttons for the CW Send dialog.", this);
+    auto *desc = new QLabel("Macro buttons for the text send dialog (CW and the FSK data sub-modes).", this);
     desc->setWordWrap(true);
     desc->setStyleSheet(K4Styles::Dialog::helpText());
     layout->addWidget(desc);
@@ -85,7 +85,7 @@ CwMacrosPage::CwMacrosPage(QWidget *parent) : QWidget(parent) {
     refresh();
 }
 
-void CwMacrosPage::refresh() {
+void TxMacrosPage::refresh() {
     auto *rs = RadioSettings::instance();
     for (const MacroRow &row : m_rows) {
         const MacroEntry entry = rs->cwMacro(row.functionId);

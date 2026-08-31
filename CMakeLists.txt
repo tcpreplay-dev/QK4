@@ -167,7 +167,7 @@ set(SOURCES
     src/ui/pages/rigcontrolpage.cpp
     src/ui/pages/cwkeyerpage.cpp
     src/ui/pages/straightkeypage.cpp
-    src/ui/pages/cwmacrospage.cpp
+    src/ui/pages/txmacrospage.cpp
     src/ui/dialogs/textsenddialog.cpp
     src/ui/widgets/keyerconnectionwidget.cpp
     src/ui/pages/kpodpage.cpp
@@ -307,7 +307,7 @@ set(HEADERS
     src/ui/pages/rigcontrolpage.h
     src/ui/pages/cwkeyerpage.h
     src/ui/pages/straightkeypage.h
-    src/ui/pages/cwmacrospage.h
+    src/ui/pages/txmacrospage.h
     src/ui/dialogs/textsenddialog.h
     src/ui/widgets/keyerconnectionwidget.h
     src/ui/pages/kpodpage.h

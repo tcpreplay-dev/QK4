@@ -40,8 +40,10 @@ TextDecodeController::TextDecodeController(RadioState *radioState, ConnectionCon
       m_subWindow(new TextDecodeWindow(TextDecodeWindow::SubRx, parentWidget)) {
 
     // MAIN RX window — user-driven events trigger CAT send.
-    connect(m_mainWindow, &TextDecodeWindow::enabledChanged, this,
-            [this](bool) { sendTextDecodeCmd(m_mainWindow, true); });
+    connect(m_mainWindow, &TextDecodeWindow::enabledChanged, this, [this](bool) {
+        noteManualDecodeChange(true);
+        sendTextDecodeCmd(m_mainWindow, true);
+    });
     connect(m_mainWindow, &TextDecodeWindow::wpmRangeChanged, this, [this](int) {
         if (m_mainWindow->isDecodeEnabled())
             sendTextDecodeCmd(m_mainWindow, true);
@@ -62,8 +64,10 @@ TextDecodeController::TextDecodeController(RadioState *radioState, ConnectionCon
     });
 
     // SUB RX window — symmetric wiring.
-    connect(m_subWindow, &TextDecodeWindow::enabledChanged, this,
-            [this](bool) { sendTextDecodeCmd(m_subWindow, false); });
+    connect(m_subWindow, &TextDecodeWindow::enabledChanged, this, [this](bool) {
+        noteManualDecodeChange(false);
+        sendTextDecodeCmd(m_subWindow, false);
+    });
     connect(m_subWindow, &TextDecodeWindow::wpmRangeChanged, this, [this](int) {
         if (m_subWindow->isDecodeEnabled())
             sendTextDecodeCmd(m_subWindow, false);
@@ -127,24 +131,14 @@ TextDecodeController::TextDecodeController(RadioState *radioState, ConnectionCon
         m_subWindow->setMaxLines(m_radioState->textDecodeLinesB());
     });
 
-    // Mode changes while a window is open → refresh its operating mode so
-    // the title bar / controls reflect the new mode (CW WPM vs data rate).
-    connect(m_radioState, &RadioState::modeChanged, this, [this](RadioState::Mode mode) {
-        if (m_mainWindow->isVisible())
-            m_mainWindow->setOperatingMode(operatingModeFor(mode, m_radioState->dataSubMode()));
-    });
-    connect(m_radioState, &RadioState::modeBChanged, this, [this](RadioState::Mode mode) {
-        if (m_subWindow->isVisible())
-            m_subWindow->setOperatingMode(operatingModeFor(mode, m_radioState->dataSubModeB()));
-    });
-    connect(m_radioState, &RadioState::dataSubModeChanged, this, [this](int subMode) {
-        if (m_mainWindow->isVisible())
-            m_mainWindow->setOperatingMode(operatingModeFor(m_radioState->mode(), subMode));
-    });
-    connect(m_radioState, &RadioState::dataSubModeBChanged, this, [this](int subMode) {
-        if (m_subWindow->isVisible())
-            m_subWindow->setOperatingMode(operatingModeFor(m_radioState->modeB(), subMode));
-    });
+    // Mode changes → refresh the window's operating mode so the title bar / controls reflect
+    // the new mode (CW WPM vs data rate). Done whether or not the window is visible: a hidden
+    // window is still the source sendTextDecodeCmd() reads the TD mode digit from, so letting
+    // it go stale means the next enable asks for the wrong decoder.
+    connect(m_radioState, &RadioState::modeChanged, this, [this]() { syncWindowToRadio(true); });
+    connect(m_radioState, &RadioState::modeBChanged, this, [this]() { syncWindowToRadio(false); });
+    connect(m_radioState, &RadioState::dataSubModeChanged, this, [this]() { syncWindowToRadio(true); });
+    connect(m_radioState, &RadioState::dataSubModeBChanged, this, [this]() { syncWindowToRadio(false); });
 
     // Decoded text buffer from radio → route to the correct window.
     connect(m_radioState, &RadioState::textBufferReceived, this, [this](const QString &text, bool isSubRx) {
@@ -164,30 +158,95 @@ TextDecodeController::~TextDecodeController() {
     // TextDecodeWindow constructor) and delete via Qt parent-ownership.
 }
 
-void TextDecodeController::showMainRx() {
-    RadioState::Mode mode = m_radioState->mode();
-    m_mainWindow->setOperatingMode(operatingModeFor(mode, m_radioState->dataSubMode()));
+void TextDecodeController::syncWindowToRadio(bool isMainRx) {
+    TextDecodeWindow *window = isMainRx ? m_mainWindow : m_subWindow;
+    const RadioState::Mode mode = isMainRx ? m_radioState->mode() : m_radioState->modeB();
+    const int subMode = isMainRx ? m_radioState->dataSubMode() : m_radioState->dataSubModeB();
+
+    // Load-bearing beyond the title bar: sendTextDecodeCmd() derives the TD mode digit from
+    // operatingMode() — 2..4 (a CW WPM range) for ModeCW, 1 for everything else. A window left
+    // on its ModeCW default would ask a receiver sitting in FSK to run the CW decoder.
+    window->setOperatingMode(operatingModeFor(mode, subMode));
+
     if (mode == RadioState::DATA || mode == RadioState::DATA_R) {
-        int dr = m_radioState->dataRate();
+        const int dr = isMainRx ? m_radioState->dataRate() : m_radioState->dataRateB();
         if (dr >= 0)
-            m_mainWindow->setDataRate(dr);
+            window->setDataRate(dr);
     }
+}
+
+void TextDecodeController::showMainRx() {
+    syncWindowToRadio(true);
     m_mainWindow->show();
     if (!m_mainWindow->isDecodeEnabled())
         m_mainWindow->setDecodeEnabled(true);
 }
 
 void TextDecodeController::showSubRx() {
-    RadioState::Mode modeB = m_radioState->modeB();
-    m_subWindow->setOperatingMode(operatingModeFor(modeB, m_radioState->dataSubModeB()));
-    if (modeB == RadioState::DATA || modeB == RadioState::DATA_R) {
-        int dr = m_radioState->dataRateB();
-        if (dr >= 0)
-            m_subWindow->setDataRate(dr);
-    }
+    syncWindowToRadio(false);
     m_subWindow->show();
     if (!m_subWindow->isDecodeEnabled())
         m_subWindow->setDecodeEnabled(true);
+}
+
+void TextDecodeController::applyFskAutoDecode(bool isMainRx, bool fskActive) {
+    TextDecodeWindow *window = isMainRx ? m_mainWindow : m_subWindow;
+    bool &autoEnabled = isMainRx ? m_autoEnabledMain : m_autoEnabledSub;
+
+    if (fskActive) {
+        if (autoEnabled)
+            return; // already ours
+        const int reportedMode = isMainRx ? m_radioState->textDecodeMode() : m_radioState->textDecodeModeB();
+        qCDebug(qk4TextDecode) << "FSK auto-decode:" << (isMainRx ? "Main RX" : "Sub RX")
+                               << "reported TD mode" << reportedMode;
+        if (reportedMode > 0)
+            return; // the operator's own decoder is already running — not ours to touch
+        if (reportedMode < 0) {
+            // -1 = we have never seen a TD for this receiver. Ask again — the radio may simply
+            // not have answered the post-RDY query (observed on Sub RX while it was switched
+            // off at connect time). Enabling anyway is deliberate: bailing here left the
+            // feature silently dead, which is worse than the failure it was guarding against
+            // (switching off, on the way out of FSK, a decoder the operator had running).
+            if (m_connection->isConnected())
+                m_connection->sendCAT(isMainRx ? QStringLiteral("TD;") : QStringLiteral("TD$;"));
+        }
+
+        autoEnabled = true;
+        m_applyingAutoDecode = true;
+        // Must happen before the enable: the window is hidden here, and the mode-change
+        // observers below only refresh a visible one, so without this it would still be on
+        // its ModeCW default and send a CW-decode TD to an FSK receiver.
+        syncWindowToRadio(isMainRx);
+        if (window->isDecodeEnabled())
+            sendTextDecodeCmd(window, isMainRx); // window already thinks it's on; make the radio agree
+        else
+            window->setDecodeEnabled(true); // enabledChanged -> sendTextDecodeCmd
+        m_applyingAutoDecode = false;
+        qCDebug(qk4TextDecode) << "FSK auto-decode enabled for" << (isMainRx ? "Main RX" : "Sub RX");
+        return;
+    }
+
+    if (!autoEnabled)
+        return;
+    autoEnabled = false;
+    m_applyingAutoDecode = true;
+    window->setDecodeEnabled(false);
+    m_applyingAutoDecode = false;
+    qCDebug(qk4TextDecode) << "FSK auto-decode restored (off) for" << (isMainRx ? "Main RX" : "Sub RX");
+}
+
+void TextDecodeController::noteManualDecodeChange(bool isMainRx) {
+    if (m_applyingAutoDecode)
+        return;
+    // The operator (or the radio, echoing a front-panel change) took over. Drop the undo —
+    // restoring later would be overriding a deliberate choice.
+    bool &autoEnabled = isMainRx ? m_autoEnabledMain : m_autoEnabledSub;
+    autoEnabled = false;
+}
+
+void TextDecodeController::onDisconnected() {
+    m_autoEnabledMain = false;
+    m_autoEnabledSub = false;
 }
 
 void TextDecodeController::sendTextDecodeCmd(TextDecodeWindow *window, bool isMainRx) {

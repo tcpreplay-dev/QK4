@@ -24,7 +24,7 @@ private slots:
             ctrl.appendChar(ch);
         QCOMPARE(sent.count(), 0);
 
-        ctrl.setCwModeActive(true);
+        ctrl.setSessionMode(TextSendController::SessionMode::Cw);
         for (QChar ch : QStringLiteral("CQ "))
             ctrl.appendChar(ch);
         QCOMPARE(sent.count(), 1);
@@ -34,7 +34,7 @@ private slots:
     // that's the operator's own mode change, not a fault to panic-stop over.
     void leavingCwModeResetsWithoutSendingRx() {
         TextSendController ctrl;
-        ctrl.setCwModeActive(true);
+        ctrl.setSessionMode(TextSendController::SessionMode::Cw);
         QSignalSpy sent(&ctrl, &TextSendController::sendCatRequested);
         QSignalSpy aborted(&ctrl, &TextSendController::aborted);
 
@@ -42,7 +42,7 @@ private slots:
             ctrl.appendChar(ch);
         const int sentBeforeModeChange = sent.count();
 
-        ctrl.setCwModeActive(false);
+        ctrl.setSessionMode(TextSendController::SessionMode::None);
         QCOMPARE(aborted.count(), 1);
         QCOMPARE(sent.count(), sentBeforeModeChange); // no "RX;" sent
 
@@ -56,7 +56,7 @@ private slots:
     // mode (the default) only cuts a chunk on space/CR/LF.
     void wordCompleteWaitsForBoundary() {
         TextSendController ctrl;
-        ctrl.setCwModeActive(true); // appendChar()/flush() no-op until the radio is confirmed in CW mode
+        ctrl.setSessionMode(TextSendController::SessionMode::Cw); // appendChar()/flush() no-op until the radio is confirmed in CW mode
         QSignalSpy sent(&ctrl, &TextSendController::sendCatRequested);
         for (QChar ch : QStringLiteral("HELLO"))
             ctrl.appendChar(ch);
@@ -68,7 +68,7 @@ private slots:
     // the delay is real, not the exact hardware-dependent duration.
     void firstPollIsDelayedLongerThanStandardCadence() {
         TextSendController ctrl;
-        ctrl.setCwModeActive(true);
+        ctrl.setSessionMode(TextSendController::SessionMode::Cw);
         QSignalSpy sent(&ctrl, &TextSendController::sendCatRequested);
 
         for (QChar ch : QStringLiteral("CQ "))
@@ -87,7 +87,7 @@ private slots:
     // confirmed once a real KY0 arrives, never before.
     void wordCompleteSendsOnBoundaryAndConfirmsOnKY0() {
         TextSendController ctrl;
-        ctrl.setCwModeActive(true); // appendChar()/flush() no-op until the radio is confirmed in CW mode
+        ctrl.setSessionMode(TextSendController::SessionMode::Cw); // appendChar()/flush() no-op until the radio is confirmed in CW mode
         QSignalSpy sent(&ctrl, &TextSendController::sendCatRequested);
         QSignalSpy inFlight(&ctrl, &TextSendController::chunkInFlight);
         QSignalSpy confirmed(&ctrl, &TextSendController::chunkConfirmed);
@@ -115,7 +115,7 @@ private slots:
     // sent until the first is confirmed.
     void secondChunkWaitsForFirstConfirm() {
         TextSendController ctrl;
-        ctrl.setCwModeActive(true); // appendChar()/flush() no-op until the radio is confirmed in CW mode
+        ctrl.setSessionMode(TextSendController::SessionMode::Cw); // appendChar()/flush() no-op until the radio is confirmed in CW mode
         QSignalSpy sent(&ctrl, &TextSendController::sendCatRequested);
 
         for (QChar ch : QStringLiteral("CQ "))
@@ -138,7 +138,7 @@ private slots:
     // into one send — confirming the whole outstanding run at once, not per character.
     void immediateModeMergesQueuedCharsIntoOneSend() {
         TextSendController ctrl;
-        ctrl.setCwModeActive(true); // appendChar()/flush() no-op until the radio is confirmed in CW mode
+        ctrl.setSessionMode(TextSendController::SessionMode::Cw); // appendChar()/flush() no-op until the radio is confirmed in CW mode
         ctrl.setImmediateMode(true);
         QSignalSpy sent(&ctrl, &TextSendController::sendCatRequested);
         QSignalSpy inFlight(&ctrl, &TextSendController::chunkInFlight);
@@ -164,7 +164,7 @@ private slots:
     // must stop the pipeline (no further sends) until abort() clears it.
     void timeoutMarksChunkStalledAndHaltsPipeline() {
         TextSendController ctrl;
-        ctrl.setCwModeActive(true); // appendChar()/flush() no-op until the radio is confirmed in CW mode
+        ctrl.setSessionMode(TextSendController::SessionMode::Cw); // appendChar()/flush() no-op until the radio is confirmed in CW mode
         ctrl.setKeyerSpeed(60); // fast WPM keeps the derived timeout short but still bounded
         QSignalSpy stalled(&ctrl, &TextSendController::chunkStalled);
         QSignalSpy confirmed(&ctrl, &TextSendController::chunkConfirmed);
@@ -191,7 +191,7 @@ private slots:
     // abort() clears everything queued/pending and forces the K4 out of TX via RX;.
     void abortClearsQueueAndSendsRx() {
         TextSendController ctrl;
-        ctrl.setCwModeActive(true); // appendChar()/flush() no-op until the radio is confirmed in CW mode
+        ctrl.setSessionMode(TextSendController::SessionMode::Cw); // appendChar()/flush() no-op until the radio is confirmed in CW mode
         QSignalSpy sent(&ctrl, &TextSendController::sendCatRequested);
         QSignalSpy aborted(&ctrl, &TextSendController::aborted);
 
@@ -213,7 +213,7 @@ private slots:
     // everything drains.
     void activeChangedTracksQueueLifecycle() {
         TextSendController ctrl;
-        ctrl.setCwModeActive(true); // appendChar()/flush() no-op until the radio is confirmed in CW mode
+        ctrl.setSessionMode(TextSendController::SessionMode::Cw); // appendChar()/flush() no-op until the radio is confirmed in CW mode
         QSignalSpy active(&ctrl, &TextSendController::activeChanged);
 
         for (QChar ch : QStringLiteral("HI "))
@@ -230,7 +230,7 @@ private slots:
     // to send "RX;" over a dead link.
     void disconnectAbortsWithoutSendingRx() {
         TextSendController ctrl;
-        ctrl.setCwModeActive(true); // appendChar()/flush() no-op until the radio is confirmed in CW mode
+        ctrl.setSessionMode(TextSendController::SessionMode::Cw); // appendChar()/flush() no-op until the radio is confirmed in CW mode
         QSignalSpy sent(&ctrl, &TextSendController::sendCatRequested);
         QSignalSpy aborted(&ctrl, &TextSendController::aborted);
 
@@ -245,6 +245,145 @@ private slots:
         // Idempotent — a second disconnect notification with nothing in progress is a no-op.
         ctrl.onDisconnected();
         QCOMPARE(aborted.count(), 1);
+    }
+
+    // ===== FSK sessions (AFSK-A / FSK-D / PSK-D) =====
+
+    // An FSK transmission is bracketed: "TX;" first, then the text after the settle delay,
+    // and the operator's own first character is not preceded by anything — CW's sacrificial
+    // 'E' would print as a literal E on the far end.
+    void fskBracketsTransmissionAndSendsNoLeadIn() {
+        TextSendController ctrl;
+        ctrl.setSessionMode(TextSendController::SessionMode::Fsk);
+        QSignalSpy sent(&ctrl, &TextSendController::sendCatRequested);
+
+        for (QChar ch : QStringLiteral("CQ "))
+            ctrl.appendChar(ch);
+
+        // Nothing but the bracket open yet — the text waits out the settle delay.
+        QCOMPARE(sent.count(), 1);
+        QCOMPARE(sent.at(0).at(0).toString(), QStringLiteral("TX;"));
+
+        QVERIFY(sent.wait(2000));
+        QCOMPARE(sent.at(1).at(0).toString(), QStringLiteral("KYCQ ;"));
+    }
+
+    // The bracket is per transmission, not per word: a second word arriving while the hang
+    // timer is still running must not re-key the radio.
+    void fskKeepsBracketOpenAcrossWords() {
+        TextSendController ctrl;
+        ctrl.setSessionMode(TextSendController::SessionMode::Fsk);
+        QSignalSpy sent(&ctrl, &TextSendController::sendCatRequested);
+
+        for (QChar ch : QStringLiteral("CQ "))
+            ctrl.appendChar(ch);
+        QVERIFY(sent.wait(2000)); // settle delay, then the first KY
+        ctrl.onCatResponse("KY0;");
+
+        for (QChar ch : QStringLiteral("DE "))
+            ctrl.appendChar(ch);
+        ctrl.onCatResponse("KY0;");
+
+        int txCount = 0;
+        int rxCount = 0;
+        for (int i = 0; i < sent.count(); ++i) {
+            const QString cmd = sent.at(i).at(0).toString();
+            if (cmd == QStringLiteral("TX;"))
+                ++txCount;
+            if (cmd == QStringLiteral("RX;"))
+                ++rxCount;
+        }
+        QCOMPARE(txCount, 1);
+        QCOMPARE(rxCount, 0); // hang timer hasn't expired yet
+    }
+
+    // Leaving FSK with the bracket still open must un-key the radio. This is the one place
+    // where a mode change is NOT silent: whoever sent "TX;" owes an "RX;".
+    void leavingFskClosesAnOpenBracket() {
+        TextSendController ctrl;
+        ctrl.setSessionMode(TextSendController::SessionMode::Fsk);
+        QSignalSpy sent(&ctrl, &TextSendController::sendCatRequested);
+
+        for (QChar ch : QStringLiteral("CQ "))
+            ctrl.appendChar(ch);
+        QCOMPARE(sent.at(0).at(0).toString(), QStringLiteral("TX;"));
+
+        ctrl.setSessionMode(TextSendController::SessionMode::None);
+        QCOMPARE(sent.at(sent.count() - 1).at(0).toString(), QStringLiteral("RX;"));
+    }
+
+    // ...but a dead link gets no "RX;" — there is nothing to send it over.
+    void disconnectDropsOpenBracketWithoutSendingRx() {
+        TextSendController ctrl;
+        ctrl.setSessionMode(TextSendController::SessionMode::Fsk);
+        QSignalSpy sent(&ctrl, &TextSendController::sendCatRequested);
+
+        for (QChar ch : QStringLiteral("CQ "))
+            ctrl.appendChar(ch);
+        const int sentBeforeDisconnect = sent.count();
+
+        ctrl.onDisconnected();
+        QCOMPARE(sent.count(), sentBeforeDisconnect);
+    }
+
+    // A CW session must never emit the bracket — KY keys and un-keys the radio by itself there.
+    void cwSessionSendsNoTxBracket() {
+        TextSendController ctrl;
+        ctrl.setSessionMode(TextSendController::SessionMode::Cw);
+        QSignalSpy sent(&ctrl, &TextSendController::sendCatRequested);
+
+        for (QChar ch : QStringLiteral("CQ "))
+            ctrl.appendChar(ch);
+        ctrl.onCatResponse("KY0;");
+
+        for (int i = 0; i < sent.count(); ++i)
+            QVERIFY(sent.at(i).at(0).toString() != QStringLiteral("TX;"));
+    }
+
+    // The 60-char KY limit is shared with the lead-in, so CW (one sacrificial 'E') cuts at 59
+    // while FSK gets the full 60.
+    void chunkCapAccountsForTheLeadIn() {
+        const QString run(70, QLatin1Char('A'));
+
+        TextSendController cw;
+        cw.setSessionMode(TextSendController::SessionMode::Cw);
+        QSignalSpy cwSent(&cw, &TextSendController::sendCatRequested);
+        for (QChar ch : run)
+            cw.appendChar(ch);
+        cw.flush();
+        QCOMPARE(cwSent.at(0).at(0).toString(), QStringLiteral("KYE") + QString(59, QLatin1Char('A')) + ";");
+
+        TextSendController fsk;
+        fsk.setSessionMode(TextSendController::SessionMode::Fsk);
+        QSignalSpy fskSent(&fsk, &TextSendController::sendCatRequested);
+        for (QChar ch : run)
+            fsk.appendChar(ch);
+        fsk.flush();
+        QVERIFY(fskSent.wait(2000));
+        QCOMPARE(fskSent.at(1).at(0).toString(), QStringLiteral("KY") + QString(60, QLatin1Char('A')) + ";");
+    }
+
+    // The suppression gate stays asserted while the bracket is open, hang window included —
+    // the radio is still transmitting, so hardware-driven CW must stay muted.
+    void activeStaysTrueWhileFskBracketOpen() {
+        TextSendController ctrl;
+        ctrl.setSessionMode(TextSendController::SessionMode::Fsk);
+        QSignalSpy active(&ctrl, &TextSendController::activeChanged);
+        QSignalSpy sent(&ctrl, &TextSendController::sendCatRequested);
+
+        for (QChar ch : QStringLiteral("CQ "))
+            ctrl.appendChar(ch);
+        QVERIFY(sent.wait(2000));
+        ctrl.onCatResponse("KY0;");
+
+        // Queue drained, but the bracket is still open — active must not have dropped.
+        QCOMPARE(active.at(active.count() - 1).at(0).toBool(), true);
+
+        // ...and it must drop once the hang timer closes the bracket, otherwise hardware CW
+        // stays suppressed until some unrelated CAT response happens to run the state update.
+        QVERIFY(active.wait(3000));
+        QCOMPARE(active.at(active.count() - 1).at(0).toBool(), false);
+        QCOMPARE(sent.at(sent.count() - 1).at(0).toString(), QStringLiteral("RX;"));
     }
 };
 

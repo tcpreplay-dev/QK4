@@ -32,6 +32,20 @@ public:
     void showMainRx();
     void showSubRx();
 
+    // Turns the K4's text decoder on for one receiver while it sits in an FSK sub-mode, and
+    // back off when it leaves — so the text send dialog's RX panes have something to show
+    // without the operator hunting for the TEXT DECODE button first. Deliberately does NOT
+    // pop the floating window; the dialog renders the same stream itself.
+    //
+    // Only ever undoes what it did: nothing happens if that receiver's decoder was already
+    // running when FSK was entered, and the undo is dropped the moment the operator toggles
+    // decode by hand. Call once per receiver whenever either one's mode or sub-mode changes.
+    void applyFskAutoDecode(bool isMainRx, bool fskActive);
+
+    // Link down: forget both pending undos without sending anything. Whatever the radio's
+    // decoder state was is now the radio's business, and there is no socket to change it over.
+    void onDisconnected();
+
 private:
     RadioState *m_radioState;           // injected, not owned
     ConnectionController *m_connection; // injected, not owned
@@ -39,6 +53,16 @@ private:
     TextDecodeWindow *m_subWindow;      // owned via Qt parent mechanism
 
     void sendTextDecodeCmd(TextDecodeWindow *window, bool isMainRx);
+    // Pushes one receiver's mode / data sub-mode / data rate into its window. Not cosmetic:
+    // sendTextDecodeCmd() reads the TD mode digit back out of operatingMode().
+    void syncWindowToRadio(bool isMainRx);
+    void noteManualDecodeChange(bool isMainRx);
+
+    // Set while applyFskAutoDecode() is driving a window, so the enabledChanged handler can
+    // tell our own toggle from the operator's.
+    bool m_applyingAutoDecode = false;
+    bool m_autoEnabledMain = false; // we turned Main RX decode on and owe it an off
+    bool m_autoEnabledSub = false;  // ditto Sub RX
 };
 
 #endif // TEXTDECODECONTROLLER_H

@@ -51,19 +51,20 @@ void BottomMenuBar::setupUi() {
     connect(m_subRxBtn, &QPushButton::clicked, this, &BottomMenuBar::subRxClicked);
     connect(m_txBtn, &QPushButton::clicked, this, &BottomMenuBar::txClicked);
 
-    // PTT uses press/release for momentary activation. In CW mode the same button becomes
-    // "CW" and a plain click opens the CW Send dialog instead — see setCwMode().
+    // PTT uses press/release for momentary activation. In CW and the FSK data sub-modes the
+    // same button becomes "CW"/"AFSK"/"FSK"/"PSK" and a plain click opens the text send
+    // dialog instead — see setTextMode().
     connect(m_pttBtn, &QPushButton::pressed, this, [this]() {
-        if (!m_cwMode)
+        if (m_textMode == TextMode::Voice)
             emit pttPressed();
     });
     connect(m_pttBtn, &QPushButton::released, this, [this]() {
-        if (!m_cwMode)
+        if (m_textMode == TextMode::Voice)
             emit pttReleased();
     });
     connect(m_pttBtn, &QPushButton::clicked, this, [this]() {
-        if (m_cwMode)
-            emit cwSendRequested();
+        if (m_textMode != TextMode::Voice)
+            emit textSendRequested();
     });
 
     // Right-click toggle (latch) mode for PTT with 180-second safety timeout
@@ -154,29 +155,29 @@ void BottomMenuBar::setPttActive(bool active) {
     }
 }
 
-void BottomMenuBar::setCwMode(bool cwMode) {
-    if (m_cwMode == cwMode)
+void BottomMenuBar::setTextMode(TextMode mode, const QString &label) {
+    if (m_textMode == mode && m_pttBtn->text() == label)
         return;
 
-    if (cwMode && m_pttLocked) {
-        // The right-click PTT latch has no meaning in CW mode (there's no audio-PTT to hold),
-        // and leaving it engaged would strand the radio in TX behind a relabeled button that
-        // no longer offers a way to drop it — force-release first.
+    if (mode != TextMode::Voice && m_pttLocked) {
+        // The right-click PTT latch has no meaning once the button stops being mic PTT
+        // (there's no audio-PTT to hold), and leaving it engaged would strand the radio in TX
+        // behind a relabeled button that no longer offers a way to drop it — force-release first.
         m_pttLocked = false;
         m_pttLockTimer->stop();
         setPttActive(false);
         emit pttReleased();
     }
 
-    m_cwMode = cwMode;
-    m_pttBtn->setText(cwMode ? "CW" : "PTT");
+    m_textMode = mode;
+    m_pttBtn->setText(label);
     m_pttBtn->setStyleSheet(K4Styles::menuBarButton());
 }
 
 bool BottomMenuBar::eventFilter(QObject *watched, QEvent *event) {
     if (watched == m_pttBtn) {
-        if (m_cwMode)
-            return QWidget::eventFilter(watched, event); // no PTT latch concept in CW mode
+        if (m_textMode != TextMode::Voice)
+            return QWidget::eventFilter(watched, event); // no PTT latch concept in CW/FSK
         if (event->type() == QEvent::MouseButtonPress) {
             auto *me = static_cast<QMouseEvent *>(event);
             if (me->button() == Qt::RightButton) {

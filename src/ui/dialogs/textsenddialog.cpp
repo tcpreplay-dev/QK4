@@ -48,7 +48,7 @@ void trimToMaxLines(QTextEdit *edit, int maxLines) {
 
 TextSendDialog::TextSendDialog(TextSendController *controller, RadioState *radioState, QWidget *parent)
     : QDialog(parent), m_controller(controller), m_radioState(radioState) {
-    setWindowTitle("CW Send");
+    setWindowTitle("CW Send"); // replaced by applySessionMode() once the mode is known
     setWindowModality(Qt::NonModal);
     resize(760, 460);
 
@@ -137,7 +137,7 @@ TextSendDialog::TextSendDialog(TextSendController *controller, RadioState *radio
 
     auto *inputRow = new QHBoxLayout();
     m_input = new QLineEdit(this);
-    m_input->setPlaceholderText("Type here to send CW...");
+    m_input->setPlaceholderText("Type here to send CW..."); // relabeled by applySessionMode()
     m_input->setStyleSheet(K4Styles::Dialog::lineEdit());
     inputRow->addWidget(m_input, 1);
     auto *clearInputBtn = new QPushButton("Clear", this);
@@ -174,9 +174,11 @@ TextSendDialog::TextSendDialog(TextSendController *controller, RadioState *radio
             [](bool checked) { RadioSettings::instance()->setCwSendImmediateMode(checked); });
     bottomRow->addWidget(m_immediateModeCheck);
     m_pauseSendCheck = new QCheckBox("Pause sending", this);
+    m_pauseSendCheck->setToolTip("Compose without transmitting. Press Enter (or uncheck) to send what you have.");
     m_pauseSendCheck->setStyleSheet(K4Styles::Dialog::checkBox());
     // Uncheck = "away it goes": send whatever accumulated in m_input while paused, as one chunk.
     connect(m_pauseSendCheck, &QCheckBox::toggled, this, [this](bool checked) {
+        updateInputPlaceholder();
         if (!checked)
             finishPendingWord();
     });
@@ -207,7 +209,7 @@ TextSendDialog::TextSendDialog(TextSendController *controller, RadioState *radio
     });
     connect(m_controller, &TextSendController::aborted, this, &TextSendDialog::onAborted);
 
-    // Without this, editing a macro in Options -> CW Macros while this dialog stays open
+    // Without this, editing a macro in Options -> TX Macros while this dialog stays open
     // leaves the F1-F8 buttons showing stale labels/tooltips until the dialog is closed and
     // reopened (refreshMacros() was only ever called at construction and on reopen).
     connect(RadioSettings::instance(), &RadioSettings::cwMacrosChanged, this, &TextSendDialog::refreshMacros);
@@ -216,6 +218,13 @@ TextSendDialog::TextSendDialog(TextSendController *controller, RadioState *radio
             [this](const QString &text, bool isSubRx) { appendRxText(text, isSubRx); });
     connect(m_radioState, &RadioState::textDecodeChanged, this, &TextSendDialog::updateRxPaneVisibility);
     connect(m_radioState, &RadioState::textDecodeBChanged, this, &TextSendDialog::updateRxPaneVisibility);
+    // Pane visibility also depends on each receiver's own mode and on whether Sub RX is even
+    // switched on — not just on the decoder's state.
+    connect(m_radioState, &RadioState::modeChanged, this, &TextSendDialog::updateRxPaneVisibility);
+    connect(m_radioState, &RadioState::modeBChanged, this, &TextSendDialog::updateRxPaneVisibility);
+    connect(m_radioState, &RadioState::dataSubModeChanged, this, &TextSendDialog::updateRxPaneVisibility);
+    connect(m_radioState, &RadioState::dataSubModeBChanged, this, &TextSendDialog::updateRxPaneVisibility);
+    connect(m_radioState, &RadioState::subRxEnabledChanged, this, &TextSendDialog::updateRxPaneVisibility);
     updateRxPaneVisibility(); // decode may already be running when this dialog is first created
 
     // m_callsignEdit sits above m_input in the layout, which would otherwise steal default
@@ -224,6 +233,7 @@ TextSendDialog::TextSendDialog(TextSendController *controller, RadioState *radio
     setTabOrder(m_callsignEdit, m_input);
 
     refreshMacros();
+    applySessionMode(); // the radio is already in CW or an FSK sub-mode by the time this opens
 }
 
 void TextSendDialog::showEvent(QShowEvent *event) {
@@ -286,12 +296,13 @@ QString TextSendDialog::expandTokens(const QString &macroText) const {
     return result;
 }
 
-void TextSendDialog::commitText(const QString &text) {
+void TextSendDialog::commitText(const QString &text, bool force) {
     if (m_stalled)
         return; // controller already ignores appendChar() while stalled — don't echo grey
                 // text the K4 will never actually see
-    if (m_pauseSendCheck->isChecked())
-        return; // typed/macro text stays visible in m_input only, until "Pause sending" is unchecked
+    if (!force && m_pauseSendCheck->isChecked())
+        return; // typed/macro text stays visible in m_input only, until "Pause sending" is
+                // unchecked or Enter releases it
     for (const QChar &ch : text) {
         appendToDisplay(ch);
         m_controller->appendChar(ch);
@@ -310,11 +321,14 @@ void TextSendDialog::appendToDisplay(QChar ch) {
 }
 
 void TextSendDialog::recolorRange(int start, int length, const QString &colorHex) {
-    if (length <= 0 || start < 0 || start + length > m_displayLength)
+    // The controller counts only the operator's own characters; m_displayOffset covers the
+    // session dividers this dialog inserted between them.
+    const int docStart = start + m_displayOffset;
+    if (length <= 0 || start < 0 || docStart + length > m_displayLength)
         return;
     QTextCursor cursor(m_display->document());
-    cursor.setPosition(start);
-    cursor.setPosition(start + length, QTextCursor::KeepAnchor);
+    cursor.setPosition(docStart);
+    cursor.setPosition(docStart + length, QTextCursor::KeepAnchor);
     QTextCharFormat fmt;
     fmt.setForeground(QColor(colorHex));
     cursor.mergeCharFormat(fmt);
@@ -331,21 +345,23 @@ void TextSendDialog::onAborted() {
     refreshMacros();
 }
 
-void TextSendDialog::finishPendingWord() {
-    if (m_pauseSendCheck->isChecked())
+void TextSendDialog::finishPendingWord(bool force) {
+    if (!force && m_pauseSendCheck->isChecked())
         return; // don't send or discard while paused — the composed reply stays in m_input
     const QString remaining = m_input->text();
     if (!remaining.isEmpty()) {
-        commitText(remaining);
+        commitText(remaining, force);
         m_input->clear();
     }
     m_controller->flush();
 }
 
 void TextSendDialog::onInputTextEdited(const QString &text) {
-    // CW has no case of its own — force uppercase as typed so the sent-text display doesn't mix
-    // case with macro text (which is stored/sent as typed by the operator, normally uppercase).
-    const QString upper = text.toUpper();
+    // CW has no case of its own, and Baudot (AFSK-A / FSK-D) has no lower case at all — force
+    // uppercase as typed so the sent-text display doesn't mix case with macro text (which is
+    // stored/sent as typed by the operator, normally uppercase). PSK-D is the exception:
+    // varicode carries mixed case and operators use it, so m_forceUppercase is false there.
+    const QString upper = m_forceUppercase ? text.toUpper() : text;
     if (upper != text) {
         m_input->blockSignals(true);
         m_input->setText(upper);
@@ -379,7 +395,11 @@ void TextSendDialog::onInputTextEdited(const QString &text) {
 }
 
 void TextSendDialog::onReturnPressed() {
-    finishPendingWord();
+    // Enter sends even while paused, and leaves the checkbox alone. "Pause sending" is about
+    // not dribbling text out word by word as it's typed — composing a full reply and then
+    // releasing it with Enter is exactly what it's for, so refusing to send would make the
+    // mode useless rather than safe. The input clears either way.
+    finishPendingWord(/*force=*/true);
 }
 
 void TextSendDialog::onMacroClicked(int slotIndex) {
@@ -437,7 +457,9 @@ void TextSendDialog::appendRxText(const QString &text, bool isSubRx) {
     cursor.movePosition(QTextCursor::End);
     for (const QChar &ch : text) {
         QTextCharFormat fmt;
-        if (kProsignChars.contains(ch)) {
+        // Prosigns are a CW convention — in RTTY and PSK these are ordinary punctuation and
+        // highlighting them would be actively misleading.
+        if (m_prosignsEnabled && kProsignChars.contains(ch)) {
             fmt.setForeground(QColor(K4Styles::Colors::AccentAmber));
             fmt.setFontWeight(QFont::Bold);
         } else {
@@ -449,9 +471,100 @@ void TextSendDialog::appendRxText(const QString &text, bool isSubRx) {
     trimToMaxLines(pane, kRxPaneMaxLines);
 }
 
+void TextSendDialog::applySessionMode() {
+    const TextSendController::SessionMode session = m_controller->sessionMode();
+
+    QString label;
+    if (session == TextSendController::SessionMode::Cw)
+        label = QStringLiteral("CW");
+    else if (session == TextSendController::SessionMode::Fsk)
+        label = RadioState::dataSubModeToString(m_radioState->activeDataSubMode()); // AFSK / FSK / PSK
+
+    // No text mode active (the operator went to SSB, or nothing is known yet): leave the dialog
+    // showing whatever the last session was rather than blanking it out. The controller already
+    // refuses to send in this state.
+    if (label.isEmpty() || label == m_sessionLabel)
+        return;
+
+    const bool firstSession = m_sessionLabel.isEmpty();
+    m_sessionLabel = label;
+    setWindowTitle(label + QStringLiteral(" Send"));
+    updateInputPlaceholder();
+
+    m_prosignsEnabled = (session == TextSendController::SessionMode::Cw);
+    m_prosignLegend->setVisible(m_prosignsEnabled);
+
+    // Baudot carries no lower case at all, so AFSK-A and FSK-D are upper-only like CW. PSK-D's
+    // varicode does, and operators use it.
+    m_forceUppercase = !(session == TextSendController::SessionMode::Fsk &&
+                         m_radioState->activeDataSubMode() == 3);
+
+    if (!firstSession)
+        appendSessionDivider(label);
+
+    updateRxPaneVisibility(); // which panes belong to this session changes with it
+}
+
+void TextSendDialog::updateInputPlaceholder() {
+    if (m_sessionLabel.isEmpty())
+        return;
+    // While paused nothing leaves on a space, so "Type" would be describing the wrong gesture:
+    // Enter is what actually sends.
+    const QString verb = m_pauseSendCheck->isChecked() ? QStringLiteral("Enter") : QStringLiteral("Type");
+    m_input->setPlaceholderText(QStringLiteral("%1 here to send %2...").arg(verb, m_sessionLabel));
+}
+
+void TextSendDialog::appendSessionDivider(const QString &label) {
+    if (m_displayLength == 0)
+        return; // nothing above it to separate
+
+    const QString divider = QStringLiteral("\n--- %1 ---\n").arg(label);
+    QTextCursor cursor(m_display->document());
+    cursor.movePosition(QTextCursor::End);
+    QTextCharFormat fmt;
+    fmt.setForeground(QColor(K4Styles::Colors::TextFaded));
+    cursor.insertText(divider, fmt);
+
+    // The history is deliberately NOT cleared on a mode switch: TextSendController's own
+    // character offsets are monotonic and survive its reset (see resetAll()), so wiping the
+    // display would silently desync every later recolor. A divider keeps both sides honest —
+    // as long as the extra characters are accounted for here and in recolorRange().
+    m_displayLength += divider.length();
+    m_displayOffset += divider.length();
+    m_display->moveCursor(QTextCursor::End);
+    m_display->ensureCursorVisible();
+}
+
 void TextSendDialog::updateRxPaneVisibility() {
-    const bool mainOn = m_radioState->textDecodeMode() != 0;
-    const bool subOn = m_radioState->textDecodeModeB() != 0;
+    // A pane belongs here only if that receiver is actually decoding THIS session's kind of
+    // text. A decoder left running on a receiver sitting in some other mode — or on a Sub RX
+    // that is switched off entirely — has nothing to do with the conversation being typed
+    // into this dialog, and showing its stale pane just reads as a bug.
+    const TextSendController::SessionMode session = m_controller->sessionMode();
+    auto decodingThisSession = [session](RadioState::Mode mode, int dataSubMode, int decodeMode) {
+        // != 0, not > 0: 0 is a decoder the radio explicitly told us is off. -1 means it has
+        // never told us anything — and since entering FSK turns the decoder on (see
+        // TextDecodeController::applyFskAutoDecode) and re-asks, "unknown" here means
+        // "asked for, answer pending", not "off".
+        if (decodeMode == 0)
+            return false;
+        switch (session) {
+        case TextSendController::SessionMode::Cw:
+            return mode == RadioState::CW || mode == RadioState::CW_R;
+        case TextSendController::SessionMode::Fsk:
+            return RadioState::isFskTextMode(mode, dataSubMode);
+        case TextSendController::SessionMode::None:
+            break;
+        }
+        return false;
+    };
+
+    const bool mainOn =
+        decodingThisSession(m_radioState->mode(), m_radioState->dataSubMode(), m_radioState->textDecodeMode());
+    const bool subOn =
+        m_radioState->subRxEnabled() &&
+        decodingThisSession(m_radioState->modeB(), m_radioState->dataSubModeB(), m_radioState->textDecodeModeB());
+
     m_rxMainText->parentWidget()->setVisible(mainOn);
     m_rxSubText->parentWidget()->setVisible(subOn);
     m_rxPaneContainer->setVisible(mainOn || subOn);

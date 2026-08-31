@@ -33,17 +33,25 @@ public:
 
     void refreshMacros();
 
+    // Re-reads the controller's session mode (and, for FSK, the active DATA sub-mode) and
+    // adapts the dialog to it: window title, prosign legend/highlighting, and whether typed
+    // text is forced to upper case. Called by MainWindow whenever the radio's mode changes,
+    // and on every show. A CW <-> FSK switch drops a divider into the history rather than
+    // clearing it — see appendSessionDivider().
+    void applySessionMode();
+
 protected:
     void showEvent(QShowEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override; // Escape aborts sending instead of closing
     bool eventFilter(QObject *watched, QEvent *event) override; // double-click-to-grab on RX panes
 
 private:
-    void commitText(const QString &text);
+    // `force` bypasses the "Pause sending" gate — see onReturnPressed().
+    void commitText(const QString &text, bool force = false);
     void appendToDisplay(QChar ch);
     void recolorRange(int start, int length, const QString &colorHex);
     void onAborted(); // stops sending / clears the stall state — does NOT clear the display
-    void finishPendingWord(); // commits + flushes whatever's left in the input, unconditionally
+    void finishPendingWord(bool force = false); // commits + flushes whatever's left in the input
     QString expandTokens(const QString &macroText) const; // ~ -> my call, * -> Callsign field
     void refreshMacroTooltips();
 
@@ -54,6 +62,9 @@ private:
 
     void appendRxText(const QString &text, bool isSubRx);
     void updateRxPaneVisibility();
+    void appendSessionDivider(const QString &label);
+    // "Type here" vs "Enter here" — the verb that actually sends depends on the pause state.
+    void updateInputPlaceholder();
     static bool looksLikeCallsign(const QString &word);
     void handleRxDoubleClick(QTextEdit *pane, const QPoint &pos);
 
@@ -75,7 +86,15 @@ private:
     QTextEdit *m_rxSubText = nullptr;
 
     int m_displayLength = 0; // character offsets here must match TextSendController's own count
-    bool m_stalled = false;  // blocks further typing/macros until abort() resets the dialog
+    // Session dividers are text the dialog inserts on its own, which the controller never
+    // counts. Every controller-reported offset is shifted by this to reach the right document
+    // position — see recolorRange(). Only ever grows, and only at the end of the document.
+    int m_displayOffset = 0;
+    bool m_stalled = false; // blocks further typing/macros until abort() resets the dialog
+
+    QString m_sessionLabel;          // "CW" / "AFSK" / "FSK" / "PSK"; empty until first applied
+    bool m_prosignsEnabled = true;   // CW only — the prosign characters are literal in RTTY/PSK
+    bool m_forceUppercase = true;    // false for PSK-D, where mixed case is normal
 };
 
 #endif // TEXTSENDDIALOG_H

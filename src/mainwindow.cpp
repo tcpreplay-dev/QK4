@@ -367,8 +367,10 @@ void MainWindow::setupHardwareController() {
             &TextSendController::onCatResponse);
     connect(m_connectionController, &ConnectionController::connectionStateChanged, m_textSendController,
             [this](TcpClient::ConnectionState state) {
-                if (state == TcpClient::Disconnected)
+                if (state == TcpClient::Disconnected) {
                     m_textSendController->onDisconnected();
+                    m_textDecodeController->onDisconnected();
+                }
             });
     connect(m_radioState, &RadioState::keyerSpeedChanged, m_textSendController, &TextSendController::setKeyerSpeed);
     m_textSendController->setKeyerSpeed(m_radioState->keyerSpeed());
@@ -381,12 +383,58 @@ void MainWindow::setupHardwareController() {
     connect(m_textSendController, &TextSendController::activeChanged, m_connectionController,
             &ConnectionController::setTextSendActive);
 
-    // Prime CW-mode state now that both m_bottomMenuBar (built in setupUi(), called before
-    // this) and m_textSendController exist — the connect() above only reacts to future
+    // Prime text-mode state now that both m_bottomMenuBar (built in setupUi(), called before
+    // this) and m_textSendController exist — the connects in setupUi() only react to future
     // transitions, not the mode already in effect at startup.
-    const bool startingInCw = (m_radioState->mode() == RadioState::CW || m_radioState->mode() == RadioState::CW_R);
-    m_bottomMenuBar->setCwMode(startingInCw);
-    m_textSendController->setCwModeActive(startingInCw);
+    updateActiveTextMode();
+}
+
+void MainWindow::updateActiveTextMode() {
+    // "Active receiver" is whichever one B SET points at — the same switch every other
+    // controller in the app branches on to decide Main RX vs Sub RX.
+    const RadioState::Mode mode = m_radioState->activeMode();
+    const int subMode = m_radioState->activeDataSubMode();
+
+    BottomMenuBar::TextMode buttonMode = BottomMenuBar::TextMode::Voice;
+    QString label = QStringLiteral("PTT");
+    TextSendController::SessionMode session = TextSendController::SessionMode::None;
+
+    if (mode == RadioState::CW || mode == RadioState::CW_R) {
+        buttonMode = BottomMenuBar::TextMode::Cw;
+        label = QStringLiteral("CW");
+        session = TextSendController::SessionMode::Cw;
+    } else if ((mode == RadioState::DATA || mode == RadioState::DATA_R) && subMode >= 1 && subMode <= 3) {
+        // Sub-mode 0 (DATA-A) is deliberately excluded: it exists for external software
+        // (WSJT-X et al.) and the K4 neither encodes nor decodes text in it. Tested on the
+        // int, not dataSubModeToString(), because the "never received" sentinel is -1 and
+        // that function flattens it to "DATA".
+        buttonMode = BottomMenuBar::TextMode::Fsk;
+        label = RadioState::dataSubModeToString(subMode); // AFSK / FSK / PSK
+        session = TextSendController::SessionMode::Fsk;
+    }
+
+    m_bottomMenuBar->setTextMode(buttonMode, label);
+    if (m_textSendController) {
+        m_textSendController->setDataRate(m_radioState->activeDataRate());
+        m_textSendController->setSessionMode(session);
+    }
+    // The dialog is modeless and survives mode changes, so it re-reads the session after the
+    // controller does. Only exists once the operator has opened it at least once.
+    if (m_textSendDialog)
+        m_textSendDialog->applySessionMode();
+
+    // Text decode is per receiver and evaluated per receiver — deliberately NOT through the
+    // B SET predicate above. Either receiver sitting in an FSK sub-mode should be decoding,
+    // whichever one the operator happens to be driving.
+    if (m_textDecodeController) {
+        m_textDecodeController->applyFskAutoDecode(
+            true, RadioState::isFskTextMode(m_radioState->mode(), m_radioState->dataSubMode()));
+        // Sub RX also has to actually be switched on — decoding a receiver that isn't
+        // listening produces nothing, and its pane would just sit there empty.
+        m_textDecodeController->applyFskAutoDecode(
+            false, m_radioState->subRxEnabled() &&
+                       RadioState::isFskTextMode(m_radioState->modeB(), m_radioState->dataSubModeB()));
+    }
 }
 
 void MainWindow::setupCatServer() {
@@ -694,17 +742,31 @@ void MainWindow::setupUi() {
         m_bottomMenuBar->setPttActive(false);
     });
 
-    // PTT is meaningless in CW (K4 is keyed via CAT, not mic audio) — the same button
-    // relabels to "CW" and opens the CW Send dialog instead. m_textSendController doesn't
-    // exist yet at this point in setupUi() (it's constructed later in
-    // setupHardwareController()) — this only registers the connection; the initial-state
-    // priming call happens there instead, once it's safe to dereference.
-    connect(m_radioState, &RadioState::modeChanged, this, [this](RadioState::Mode mode) {
-        const bool isCw = (mode == RadioState::CW || mode == RadioState::CW_R);
-        m_bottomMenuBar->setCwMode(isCw);
-        m_textSendController->setCwModeActive(isCw);
-    });
-    connect(m_bottomMenuBar, &BottomMenuBar::cwSendRequested, this, [this]() {
+    // PTT is meaningless in CW and in the K4's text data sub-modes (the radio generates the
+    // signal from CAT, not mic audio) — the same button relabels to CW/AFSK/FSK/PSK and opens
+    // the text send dialog instead. Five signals feed the same recompute because "active
+    // receiver" follows B SET: the mode or sub-mode of either receiver can change, and so can
+    // which one B SET points at. m_textSendController doesn't exist yet at this point in
+    // setupUi() (it's constructed later in setupHardwareController()) — these only register
+    // the connections; the initial-state priming call happens there, once it's safe to
+    // dereference.
+    connect(m_radioState, &RadioState::modeChanged, this, &MainWindow::updateActiveTextMode);
+    connect(m_radioState, &RadioState::modeBChanged, this, &MainWindow::updateActiveTextMode);
+    connect(m_radioState, &RadioState::dataSubModeChanged, this, &MainWindow::updateActiveTextMode);
+    connect(m_radioState, &RadioState::dataSubModeBChanged, this, &MainWindow::updateActiveTextMode);
+    connect(m_radioState, &RadioState::bSetChanged, this, &MainWindow::updateActiveTextMode);
+    // Text-decode state feeds the FSK auto-decode decision, which has to wait for a real TD
+    // reading rather than act on the -1 "never received" sentinel — see applyFskAutoDecode().
+    connect(m_radioState, &RadioState::textDecodeChanged, this, &MainWindow::updateActiveTextMode);
+    connect(m_radioState, &RadioState::textDecodeBChanged, this, &MainWindow::updateActiveTextMode);
+    // Data rate feeds the FSK stall timeout. Switching RTTY45 <-> RTTY75 from the decode
+    // window doesn't change the mode, so without these the controller's estimate goes stale
+    // by roughly 2x for the rest of the session.
+    connect(m_radioState, &RadioState::dataRateChanged, this, &MainWindow::updateActiveTextMode);
+    connect(m_radioState, &RadioState::dataRateBChanged, this, &MainWindow::updateActiveTextMode);
+    // Sub RX being switched off has to withdraw its auto-decode the same way leaving FSK does.
+    connect(m_radioState, &RadioState::subRxEnabledChanged, this, &MainWindow::updateActiveTextMode);
+    connect(m_bottomMenuBar, &BottomMenuBar::textSendRequested, this, [this]() {
         if (!m_textSendDialog) {
             m_textSendDialog = new TextSendDialog(m_textSendController, m_radioState, this);
         } else {
@@ -1243,6 +1305,15 @@ void MainWindow::onRadioReady() {
     m_connectionController->sendCAT("#FPS;"); // Query back to confirm and update menu
     m_connectionController->sendCAT("#SCL;"); // Panadapter scale - not in RDY, needed for dB range
     m_connectionController->sendCAT("PS;");   // Remote power state - not in RDY, drives the status-bar power button
+    // DATA sub-mode and text-decode state for both receivers. Whether RDY carries these has
+    // not been confirmed against hardware, and both fields use a -1 "never received"
+    // sentinel: without them the bottom-bar button can't tell AFSK/FSK/PSK from plain DATA on
+    // a fresh connect, and the FSK auto-decode can't tell "decode off" from "unknown". These
+    // are plain GETs, so asking again costs one round trip even if RDY already answered.
+    m_connectionController->sendCAT("DT;");
+    m_connectionController->sendCAT("DT$;");
+    m_connectionController->sendCAT("TD;");
+    m_connectionController->sendCAT("TD$;");
     // Note: ML and KP commands come in RDY; dump - no need to query
 
     // KZL is the remote key-down initial delay (K4 reference Rev D5), not element length.

@@ -254,6 +254,10 @@ public:
     // ATU mode (0=not installed, 1=bypass, 2=auto)
     int atuMode() const { return m_antennaState.atuMode; }
 
+    // Sub receiver on/off (SB command). The backing field carries a -1 "never received"
+    // sentinel, reported here as off — nothing should light up a Sub RX view on a guess.
+    bool subRxEnabled() const { return m_rxTxMeterState.subReceiverEnabled == 1; }
+
     // B SET (Target B) - controls whether feature menu commands target Sub RX
     // State is tracked internally (toggled when SW44 is sent)
     bool bSetEnabled() const { return m_rxTxMeterState.bSetEnabled; }
@@ -380,6 +384,25 @@ public:
     // Data rate (DR command): 0=slower (RTTY45/PSK31), 1=faster (RTTY75/PSK63)
     int dataRate() const { return m_dataControlState.dataRate; }
     int dataRateB() const { return m_dataControlState.dataRateB; }
+
+    // "Active receiver" convenience — B SET is what every controller already
+    // branches on to decide whether a control targets Main RX or Sub RX
+    // (see bandnavigationcontroller.cpp, ritxitcontroller.cpp, et al.), so
+    // these fold that same choice into one accessor for callers that care
+    // about "whichever receiver the operator is driving right now".
+    //
+    // Note these return the raw ints for the sub-mode/rate: both carry a -1
+    // "never received" sentinel that dataSubModeToString() flattens to
+    // "DATA", so predicates must test the int, never the string.
+    // True for the DATA sub-modes the K4 itself encodes and decodes text in: AFSK-A, FSK-D
+    // and PSK-D. DATA-A (sub-mode 0) is not one of them — it exists for external software.
+    static bool isFskTextMode(Mode mode, int dataSubMode) {
+        return (mode == DATA || mode == DATA_R) && dataSubMode >= 1 && dataSubMode <= 3;
+    }
+
+    Mode activeMode() const { return bSetEnabled() ? modeB() : mode(); }
+    int activeDataSubMode() const { return bSetEnabled() ? dataSubModeB() : dataSubMode(); }
+    int activeDataRate() const { return bSetEnabled() ? dataRateB() : dataRate(); }
 
     // RX Graphic Equalizer (RE command) - 8 bands, -16 to +16 dB
     // Bands: 100, 200, 400, 800, 1200, 1600, 2400, 3200 Hz
