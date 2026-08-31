@@ -2,6 +2,7 @@
 #define TEXTSENDDIALOG_H
 
 #include <QCheckBox>
+#include <QComboBox>
 #include <QDialog>
 #include <QKeyEvent>
 #include <QLabel>
@@ -75,6 +76,11 @@ private:
     void updateVfoStrip();
     // "Type here" vs "Enter here" — the verb that actually sends depends on the pause state.
     void updateInputPlaceholder();
+    // True while the send mode is "Enter key": typed text accumulates and nothing leaves until
+    // Enter (which is also what unchecking the old "Hold until Enter" checkbox used to do).
+    bool holdUntilEnter() const;
+    // Rebuilds the combo's entries for the current session and re-selects the stored mode.
+    void refreshSendModeCombo();
     static bool looksLikeCallsign(const QString &word);
     void handleRxDoubleClick(QTextEdit *pane, const QPoint &pos);
 
@@ -85,12 +91,12 @@ private:
     QTextEdit *m_display = nullptr;
     QLineEdit *m_input = nullptr;
     QPushButton *m_abortBtn = nullptr;
-    QCheckBox *m_immediateModeCheck = nullptr;
-    QCheckBox *m_pauseSendCheck = nullptr; // while checked, typed/macro text accumulates but nothing is sent
+    QComboBox *m_sendModeCombo = nullptr; // character / word / Enter — see RadioSettings::TextSendMode
     QLabel *m_stalledBanner = nullptr;
     QLabel *m_vfoAModeLabel = nullptr; // mode under the A square, as on the K4's own display
     QLabel *m_vfoBModeLabel = nullptr;
     QPushButton *m_txSideBtn = nullptr; // the TX arrow; clickable only when both VFOs match
+    bool m_txSwitchable = false; // both VFOs in the same mode — see updateVfoStrip()
     VfoSquareWidget *m_vfoASquare = nullptr; // recolored red while this VFO is transmitting
     VfoSquareWidget *m_vfoBSquare = nullptr;
     QVector<QPushButton *> m_macroButtons;

@@ -8,6 +8,7 @@
 #include "utils/macroids.h"
 
 #include <QEvent>
+#include <QSignalBlocker>
 #include <QFont>
 #include <QHBoxLayout>
 #include <QMouseEvent>
@@ -130,7 +131,10 @@ TextSendDialog::TextSendDialog(TextSendController *controller, RadioState *radio
     m_txSideBtn->setCursor(Qt::PointingHandCursor);
     m_txSideBtn->setAutoDefault(false); // same Enter-in-lineedit gotcha as the macro buttons
     m_txSideBtn->setFixedSize(90, kVfoSquareBodySize);
-    connect(m_txSideBtn, &QPushButton::clicked, this, [this]() { emit txSideToggleRequested(); });
+    connect(m_txSideBtn, &QPushButton::clicked, this, [this]() {
+        if (m_txSwitchable)
+            emit txSideToggleRequested();
+    });
     txColumn->addWidget(m_txSideBtn);
     txColumn->addStretch();
     vfoRow->addLayout(txColumn);
@@ -141,6 +145,7 @@ TextSendDialog::TextSendDialog(TextSendController *controller, RadioState *radio
     layout->addLayout(vfoRow);
 
     connect(m_radioState, &RadioState::transmitStateChanged, this, &TextSendDialog::updateVfoStrip);
+    connect(m_radioState, &RadioState::subRxEnabledChanged, this, &TextSendDialog::updateVfoStrip);
     connect(m_radioState, &RadioState::splitChanged, this, &TextSendDialog::updateVfoStrip);
     connect(m_radioState, &RadioState::modeChanged, this, &TextSendDialog::updateVfoStrip);
     connect(m_radioState, &RadioState::modeBChanged, this, &TextSendDialog::updateVfoStrip);
@@ -272,22 +277,29 @@ TextSendDialog::TextSendDialog(TextSendController *controller, RadioState *radio
     layout->addLayout(macroRow2);
 
     auto *bottomRow = new QHBoxLayout();
-    m_immediateModeCheck = new QCheckBox("Send immediately", this);
-    m_immediateModeCheck->setStyleSheet(K4Styles::Dialog::checkBox());
-    m_immediateModeCheck->setChecked(RadioSettings::instance()->cwSendImmediateMode());
-    connect(m_immediateModeCheck, &QCheckBox::toggled, this,
-            [](bool checked) { RadioSettings::instance()->setCwSendImmediateMode(checked); });
-    bottomRow->addWidget(m_immediateModeCheck);
-    m_pauseSendCheck = new QCheckBox("Pause sending", this);
-    m_pauseSendCheck->setToolTip("Compose without transmitting. Press Enter (or uncheck) to send what you have.");
-    m_pauseSendCheck->setStyleSheet(K4Styles::Dialog::checkBox());
-    // Uncheck = "away it goes": send whatever accumulated in m_input while paused, as one chunk.
-    connect(m_pauseSendCheck, &QCheckBox::toggled, this, [this](bool checked) {
-        updateInputPlaceholder();
-        if (!checked)
+    // One control, not two checkboxes. The old pair expressed three mutually exclusive
+    // behaviors badly: with "hold until Enter" checked, "send immediately" silently did
+    // nothing, and neither label said what "both off" meant (send on every word).
+    auto *sendModeLabel = new QLabel("Send on:", this);
+    sendModeLabel->setStyleSheet(K4Styles::Dialog::formLabel());
+    bottomRow->addWidget(sendModeLabel);
+
+    m_sendModeCombo = new QComboBox(this);
+    m_sendModeCombo->setStyleSheet(K4Styles::Dialog::comboBox());
+    refreshSendModeCombo();
+    connect(m_sendModeCombo, &QComboBox::currentIndexChanged, this, [this](int index) {
+        if (index < 0)
+            return;
+        const int mode = m_sendModeCombo->itemData(index).toInt();
+        // Leaving "Enter key" is "away it goes": release whatever accumulated while holding,
+        // matching what unchecking the old checkbox did.
+        const bool wasHolding = holdUntilEnter();
+        RadioSettings::instance()->setTextSendMode(mode);
+        if (wasHolding && mode != RadioSettings::SendOnEnter)
             finishPendingWord();
+        updateInputPlaceholder();
     });
-    bottomRow->addWidget(m_pauseSendCheck);
+    bottomRow->addWidget(m_sendModeCombo);
     bottomRow->addStretch();
     m_abortBtn = new QPushButton("Abort (Esc)", this);
     m_abortBtn->setStyleSheet(QString("QPushButton { background-color: %1; color: %2; font-weight: bold; "
@@ -346,7 +358,7 @@ void TextSendDialog::showEvent(QShowEvent *event) {
     // The dialog is created once and reused (hidden/shown) for the whole app session, so this
     // must run on every show, not just construction.
     m_input->setFocus();
-    m_immediateModeCheck->setChecked(RadioSettings::instance()->cwSendImmediateMode());
+    applySessionMode();
 }
 
 void TextSendDialog::keyPressEvent(QKeyEvent *event) {
@@ -405,7 +417,7 @@ void TextSendDialog::commitText(const QString &text, bool force) {
     if (m_stalled)
         return; // controller already ignores appendChar() while stalled — don't echo grey
                 // text the K4 will never actually see
-    if (!force && m_pauseSendCheck->isChecked())
+    if (!force && holdUntilEnter())
         return; // typed/macro text stays visible in m_input only, until "Pause sending" is
                 // unchecked or Enter releases it
     for (const QChar &ch : text) {
@@ -451,10 +463,16 @@ void TextSendDialog::onAborted() {
 }
 
 void TextSendDialog::finishPendingWord(bool force) {
-    if (!force && m_pauseSendCheck->isChecked())
+    if (!force && holdUntilEnter())
         return; // don't send or discard while paused — the composed reply stays in m_input
-    const QString remaining = m_input->text();
+    QString remaining = m_input->text();
     if (!remaining.isEmpty()) {
+        // Enter ends a transmission the way a space ends a word. Without this the next thing
+        // sent runs straight into this one — "...PRESS ENTER NOW" followed by "AND NOW I TYPE"
+        // went out as "...PRESS ENTER NOWAND NOW I TYPE". Skipped when the text already ends
+        // in a space, which is how the macro path leaves it.
+        if (!remaining.endsWith(QChar(' ')))
+            remaining += QChar(' ');
         commitText(remaining, force);
         m_input->clear();
     }
@@ -473,7 +491,7 @@ void TextSendDialog::onInputTextEdited(const QString &text) {
         m_input->blockSignals(false);
     }
 
-    if (m_pauseSendCheck->isChecked())
+    if (holdUntilEnter())
         return; // let the field accumulate normally; nothing is sent until unpaused
 
     if (m_controller->immediateMode()) {
@@ -585,6 +603,10 @@ void TextSendDialog::applySessionMode() {
     else if (session == TextSendController::SessionMode::Fsk)
         label = RadioState::dataSubModeToString(m_radioState->activeDataSubMode()); // AFSK / FSK / PSK
 
+    // Ahead of the early return: the offered choices depend on the session, and this has to
+    // re-run on every show even when the session itself hasn't changed.
+    refreshSendModeCombo();
+
     // No text mode active (the operator went to SSB, or nothing is known yet): leave the dialog
     // showing whatever the last session was rather than blanking it out. The controller already
     // refuses to send in this state.
@@ -610,12 +632,38 @@ void TextSendDialog::applySessionMode() {
     updateRxPaneVisibility(); // which panes belong to this session changes with it
 }
 
+bool TextSendDialog::holdUntilEnter() const {
+    return RadioSettings::instance()->textSendMode() == RadioSettings::SendOnEnter;
+}
+
+void TextSendDialog::refreshSendModeCombo() {
+    const int stored = RadioSettings::instance()->textSendMode();
+
+    // "Each character" cuts a chunk per keystroke. That suits CW's element-at-a-time keying but
+    // not FSK: at RTTY45 every character costs a full KY0 confirm round trip, and typing faster
+    // than that cycle loses text. It is left out of the list entirely in an FSK session rather
+    // than offered and misbehaving; the stored setting is untouched, so CW gets it back.
+    const bool isFsk = (m_controller->sessionMode() == TextSendController::SessionMode::Fsk);
+
+    QSignalBlocker blocker(m_sendModeCombo); // rebuilding must not look like an operator choice
+    m_sendModeCombo->clear();
+    if (!isFsk)
+        m_sendModeCombo->addItem("Each character", RadioSettings::SendEachCharacter);
+    m_sendModeCombo->addItem("Each word", RadioSettings::SendEachWord);
+    m_sendModeCombo->addItem("Enter key", RadioSettings::SendOnEnter);
+
+    const int index = m_sendModeCombo->findData(stored);
+    m_sendModeCombo->setCurrentIndex(index >= 0 ? index : m_sendModeCombo->findData(RadioSettings::SendEachWord));
+    m_sendModeCombo->setToolTip("When typed text is handed to the radio");
+    updateInputPlaceholder();
+}
+
 void TextSendDialog::updateInputPlaceholder() {
     if (m_sessionLabel.isEmpty())
         return;
     // While paused nothing leaves on a space, so "Type" would be describing the wrong gesture:
     // Enter is what actually sends.
-    const QString verb = m_pauseSendCheck->isChecked() ? QStringLiteral("Enter") : QStringLiteral("Type");
+    const QString verb = holdUntilEnter() ? QStringLiteral("Enter") : QStringLiteral("Type");
     m_input->setPlaceholderText(QStringLiteral("%1 here to send %2...").arg(verb, m_sessionLabel));
 }
 
@@ -643,17 +691,27 @@ void TextSendDialog::updateVfoStrip() {
     // Only offer the switch when both VFOs are in the same mode — including the DATA sub-mode,
     // which is why this compares the full mode strings rather than mode() alone. Flipping TX
     // onto a VFO in a different mode would silently change what the radio transmits.
-    const bool switchable = (modeA == modeB) && !modeA.isEmpty();
-    m_txSideBtn->setEnabled(switchable);
-    m_txSideBtn->setToolTip(switchable ? QStringLiteral("Switch which VFO transmits")
-                                       : QStringLiteral("Both VFOs must be in the same mode to switch TX sides"));
-    // FontSizeIndicator is what the main display's TX label and triangles use.
+    // Sub RX has to be on as well as the modes matching. With it off there is only one
+    // receiver in play, so there is nothing to move TX between as far as this dialog is
+    // concerned — the general split case (RX on A, TX on B, Sub RX off) is the main window's
+    // SPLIT button, not a text-conversation control.
+    m_txSwitchable = (modeA == modeB) && !modeA.isEmpty() && m_radioState->subRxEnabled();
+    // Deliberately NOT setEnabled(false) when it can't be switched: Qt's disabled palette
+    // greyed the label out, which fought the one job this indicator has — reading the same as
+    // the main display's TX indicator, amber on receive and TxRed while keyed. The button stays
+    // enabled and simply ignores the click (which also keeps the explanatory tooltip working,
+    // since a disabled widget gets no mouse events at all). The cursor is the affordance.
+    m_txSideBtn->setCursor(m_txSwitchable ? Qt::PointingHandCursor : Qt::ArrowCursor);
+    m_txSideBtn->setToolTip(m_txSwitchable
+                                ? QStringLiteral("Switch which VFO transmits")
+                                : QStringLiteral("Needs Sub RX on and both VFOs in the same mode"));
+    // Same color rule and FontSizeIndicator as TxStateController uses for the main display's
+    // TX label and triangles.
     m_txSideBtn->setStyleSheet(
         QString("QPushButton { color: %1; background: transparent; border: none; font-weight: bold; "
-                "font-size: %2px; } QPushButton:disabled { color: %3; }")
+                "font-size: %2px; }")
             .arg(transmitting ? K4Styles::Colors::TxRed : K4Styles::Colors::AccentAmber)
-            .arg(K4Styles::Dimensions::FontSizeIndicator)
-            .arg(K4Styles::Colors::InactiveGray));
+            .arg(K4Styles::Dimensions::FontSizeIndicator));
 }
 
 void TextSendDialog::appendSessionDivider(const QString &label) {

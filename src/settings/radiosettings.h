@@ -117,6 +117,15 @@ public:
 
     // CW Send dialog: whether typed characters key immediately, or only once a word is
     // completed (space/Enter). Default false (word-complete) — see CW Send Dialog design.
+    // When the text send dialog actually hands typed text to the radio. Three mutually
+    // exclusive behaviors that were previously two interacting checkboxes, where "hold until
+    // Enter" silently made "send immediately" do nothing.
+    enum TextSendMode { SendEachCharacter = 0, SendEachWord = 1, SendOnEnter = 2 };
+
+    int textSendMode() const;
+    void setTextSendMode(int mode);
+
+    // Superseded by textSendMode(); still read once at load time to migrate the old setting.
     bool cwSendImmediateMode() const;
     void setCwSendImmediateMode(bool immediate);
 
@@ -209,6 +218,7 @@ signals:
     void macrosChanged();
     void cwMacrosChanged();
     void cwSendImmediateModeChanged(bool immediate);
+    void textSendModeChanged(int mode);
     // Port, device type or auto-connect changed for one role (RadioSettings::KeyerRole).
     void keyerConfigChanged(int role);
     void straightKeyTimingChanged();
@@ -256,6 +266,7 @@ private:
     // CW Send macros (separate from m_macros — see cwMacros() above) and mode setting.
     QMap<QString, MacroEntry> m_cwMacros;
     bool m_cwSendImmediateMode = false;
+    int m_textSendMode = SendEachWord;
 
     // RX EQ Presets (4 slots)
     EqPreset m_rxEqPresets[4];

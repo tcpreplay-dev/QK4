@@ -374,9 +374,11 @@ void MainWindow::setupHardwareController() {
             });
     connect(m_radioState, &RadioState::keyerSpeedChanged, m_textSendController, &TextSendController::setKeyerSpeed);
     m_textSendController->setKeyerSpeed(m_radioState->keyerSpeed());
-    m_textSendController->setImmediateMode(RadioSettings::instance()->cwSendImmediateMode());
-    connect(RadioSettings::instance(), &RadioSettings::cwSendImmediateModeChanged, m_textSendController,
-            &TextSendController::setImmediateMode);
+    // Character-at-a-time sending is a CW-only option (see TextSendDialog::refreshSendModeCombo),
+    // so the session has to be part of the decision — which is why MainWindow owns this push
+    // rather than the settings signal wiring straight through to the controller.
+    connect(RadioSettings::instance(), &RadioSettings::textSendModeChanged, this,
+            [this](int) { updateActiveTextMode(); });
     // Suppresses hardware-driven CW (paddle/straight key) while a text send is queued/in-flight,
     // and vice versa never happens since TextSendController only sends while nothing else is —
     // see the gate additions in cwcontroller.cpp.
@@ -417,6 +419,9 @@ void MainWindow::updateActiveTextMode() {
     if (m_textSendController) {
         m_textSendController->setDataRate(m_radioState->activeDataRate());
         m_textSendController->setSessionMode(session);
+        m_textSendController->setImmediateMode(
+            session == TextSendController::SessionMode::Cw &&
+            RadioSettings::instance()->textSendMode() == RadioSettings::SendEachCharacter);
     }
     // The dialog is modeless and survives mode changes, so it re-reads the session after the
     // controller does. Only exists once the operator has opened it at least once.

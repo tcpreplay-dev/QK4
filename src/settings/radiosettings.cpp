@@ -359,6 +359,20 @@ void RadioSettings::setCwMacro(const QString &functionId, const QString &label, 
     }
 }
 
+int RadioSettings::textSendMode() const {
+    return m_textSendMode;
+}
+
+void RadioSettings::setTextSendMode(int mode) {
+    if (mode < SendEachCharacter || mode > SendOnEnter)
+        return;
+    if (m_textSendMode != mode) {
+        m_textSendMode = mode;
+        save();
+        emit textSendModeChanged(mode);
+    }
+}
+
 bool RadioSettings::cwSendImmediateMode() const {
     return m_cwSendImmediateMode;
 }
@@ -729,6 +743,12 @@ void RadioSettings::load() {
     }
     m_settings.endArray();
     m_cwSendImmediateMode = m_settings.value("cwSend/immediateMode", false).toBool();
+    // Migrated, not defaulted: an operator who had "send immediately" on keeps character-at-a-
+    // time sending under the new three-way setting instead of silently reverting to per-word.
+    const int migrated = m_cwSendImmediateMode ? SendEachCharacter : SendEachWord;
+    m_textSendMode = m_settings.value("textSend/sendMode", migrated).toInt();
+    if (m_textSendMode < SendEachCharacter || m_textSendMode > SendOnEnter)
+        m_textSendMode = SendEachWord;
 
     // RX EQ Presets (4 slots)
     for (int i = 0; i < 4; ++i) {
@@ -842,6 +862,7 @@ void RadioSettings::save() {
     }
     m_settings.endArray();
     m_settings.setValue("cwSend/immediateMode", m_cwSendImmediateMode);
+    m_settings.setValue("textSend/sendMode", m_textSendMode);
 
     // DX Cluster settings
     m_settings.beginWriteArray("dxClusters");

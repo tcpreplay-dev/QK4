@@ -267,4 +267,22 @@ void TextDecodeController::sendTextDecodeCmd(TextDecodeWindow *window, bool isMa
     QString cmd = QString("%1%2%3%4;").arg(cmdPrefix).arg(mode).arg(threshold).arg(window->maxLines());
     qCDebug(qk4TextDecode) << "sending" << cmd;
     m_connection->sendCAT(cmd);
+
+    // The K4 does not echo a TD SET — same as DT and DR (see datacontrolstate.h). Without this,
+    // RadioState's textDecodeMode stays on whatever it last *read*, so everything downstream
+    // believes the decoder is still off: switching Sub RX on with VFO B already in FSK enabled
+    // the decoder on the radio but never raised the dialog's Sub pane, and only a reconnect —
+    // which re-queries TD$; and finally reads the true value — fixed it.
+    //
+    // Optimistic update, mirroring the DT/DR precedent. The setters no-op when the value is
+    // unchanged, so a radio that does echo simply confirms what is already stored.
+    if (isMainRx) {
+        m_radioState->setTextDecodeMode(mode);
+        m_radioState->setTextDecodeThreshold(threshold);
+        m_radioState->setTextDecodeLines(window->maxLines());
+    } else {
+        m_radioState->setTextDecodeModeB(mode);
+        m_radioState->setTextDecodeThresholdB(threshold);
+        m_radioState->setTextDecodeLinesB(window->maxLines());
+    }
 }
