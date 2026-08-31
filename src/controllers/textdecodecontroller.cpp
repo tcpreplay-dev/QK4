@@ -107,6 +107,8 @@ TextDecodeController::TextDecodeController(RadioState *radioState, ConnectionCon
 
     // Radio text-decode config echoes → sync window state.
     connect(m_radioState, &RadioState::textDecodeChanged, this, [this]() {
+        if (m_applyingOptimisticState)
+            return; // our own values on their way out — see sendTextDecodeCmd()
         int mode = m_radioState->textDecodeMode();
         bool enabled = (mode > 0);
         m_mainWindow->setDecodeEnabled(enabled);
@@ -119,6 +121,8 @@ TextDecodeController::TextDecodeController(RadioState *radioState, ConnectionCon
         m_mainWindow->setMaxLines(m_radioState->textDecodeLines());
     });
     connect(m_radioState, &RadioState::textDecodeBChanged, this, [this]() {
+        if (m_applyingOptimisticState)
+            return; // our own values on their way out — see sendTextDecodeCmd()
         int mode = m_radioState->textDecodeModeB();
         bool enabled = (mode > 0);
         m_subWindow->setDecodeEnabled(enabled);
@@ -263,8 +267,14 @@ void TextDecodeController::sendTextDecodeCmd(TextDecodeWindow *window, bool isMa
             mode = 1;
         }
     }
+    // Captured before anything is sent: the optimistic setters below emit textDecodeChanged
+    // synchronously, and that handler writes threshold/maxLines back into this same window from
+    // RadioState values that haven't been updated yet. Reading window->maxLines() again after
+    // that point would store something other than what was actually sent.
+    const int lines = window->maxLines();
+
     QString cmdPrefix = isMainRx ? "TD" : "TD$";
-    QString cmd = QString("%1%2%3%4;").arg(cmdPrefix).arg(mode).arg(threshold).arg(window->maxLines());
+    QString cmd = QString("%1%2%3%4;").arg(cmdPrefix).arg(mode).arg(threshold).arg(lines);
     qCDebug(qk4TextDecode) << "sending" << cmd;
     m_connection->sendCAT(cmd);
 
@@ -276,13 +286,22 @@ void TextDecodeController::sendTextDecodeCmd(TextDecodeWindow *window, bool isMa
     //
     // Optimistic update, mirroring the DT/DR precedent. The setters no-op when the value is
     // unchanged, so a radio that does echo simply confirms what is already stored.
+    // All three setters emit textDecodeChanged synchronously, and that handler exists to sync
+    // the window FROM the radio. Re-entering it here would have it write our own values back
+    // into the window they came from, reading whichever of the three fields hadn't been set
+    // yet — enough to clamp the -1 "never received" lines sentinel into the window, flip
+    // auto-threshold off in a CW session, and (setting mode last) briefly toggle the window's
+    // enabled state, which bounces straight back into this function. The window already holds
+    // exactly these values, so the guard simply skips that work.
+    m_applyingOptimisticState = true;
     if (isMainRx) {
         m_radioState->setTextDecodeMode(mode);
         m_radioState->setTextDecodeThreshold(threshold);
-        m_radioState->setTextDecodeLines(window->maxLines());
+        m_radioState->setTextDecodeLines(lines);
     } else {
         m_radioState->setTextDecodeModeB(mode);
         m_radioState->setTextDecodeThresholdB(threshold);
-        m_radioState->setTextDecodeLinesB(window->maxLines());
+        m_radioState->setTextDecodeLinesB(lines);
     }
+    m_applyingOptimisticState = false;
 }

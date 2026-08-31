@@ -28,6 +28,11 @@ public:
 
     explicit TextDecodeWindow(Receiver rx, QWidget *parent = nullptr);
 
+    // Upper bound on retained decoded text, enforced alongside maxLines(). The line cap alone
+    // is not a bound: RTTY/PSK decode arrives with no line breaks, so the document stays one
+    // block and grows forever.
+    static constexpr int kMaxBufferChars = 16 * 1024;
+
     void appendText(const QString &text);
     void clearText();
     void setMaxLines(int lines);

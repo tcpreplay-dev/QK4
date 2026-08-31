@@ -61,6 +61,11 @@ private:
     // Set while applyFskAutoDecode() is driving a window, so the enabledChanged handler can
     // tell our own toggle from the operator's.
     bool m_applyingAutoDecode = false;
+    // Set while sendTextDecodeCmd() pushes its own values into RadioState. Those setters emit
+    // textDecodeChanged synchronously, and the handler's job is to sync the window FROM the
+    // radio — here it would be writing our own values back into the window they came from,
+    // reading fields not yet updated on the way. See sendTextDecodeCmd().
+    bool m_applyingOptimisticState = false;
     bool m_autoEnabledMain = false; // we turned Main RX decode on and owe it an off
     bool m_autoEnabledSub = false;  // ditto Sub RX
 };

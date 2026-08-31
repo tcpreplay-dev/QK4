@@ -4,9 +4,9 @@
 #include "models/radiostate.h"
 #include "settings/radiosettings.h"
 #include "ui/styling/k4styles.h"
-#include "ui/widgets/vforowwidget.h"
-#include "utils/radioutils.h" // VfoSquareWidget — same A/B squares the main display uses
+#include "ui/widgets/vforowwidget.h" // VfoSquareWidget — same A/B squares the main display uses
 #include "utils/macroids.h"
+#include "utils/radioutils.h"
 
 #include <QEvent>
 #include <QSignalBlocker>
@@ -28,6 +28,13 @@ const Qt::Key kSlotKeys[] = {Qt::Key_F1, Qt::Key_F2, Qt::Key_F3, Qt::Key_F4,
                              Qt::Key_F5, Qt::Key_F6, Qt::Key_F7, Qt::Key_F8};
 
 const int kRxPaneMaxLines = 10;
+
+// Hard character cap on each RX pane, independent of the line cap. Decoded RTTY/PSK arrives
+// from TB as a character stream with no line breaks at all, so blockCount stays 1 and a
+// line-based trim never fires — an overnight receive grew one QTextDocument block without
+// bound and made the whole app sluggish. 16 KB is far more scrollback than the 80px pane can
+// show and still bounded.
+const int kRxPaneMaxChars = 16 * 1024;
 
 // Mirrors VfoSquareWidget's own paintEvent geometry: 4px top pad + 10px lock-arc space above a
 // 30px square. Used to line the TX label up with the squares' centre rather than their top.
@@ -52,13 +59,6 @@ QLabel *makeTag(const QString &text, const char *bgColor, QWidget *parent) {
     return tag;
 }
 
-// Frequency the way the main display renders it (FrequencyDisplayWidget::paintEvent): trailing
-// digits below the tuning-rate position in TextGray, everything else in the widget's "normal"
-// color — which SubDivIndicatorController::setVfoBDimmed swaps from TextWhite to InactiveGray
-// for VFO B while Sub RX is off. Digits and dots only, so the rich text needs no escaping.
-//
-// The trailing run is fixed at two digits here rather than tracking the tuning rate: this is a
-// readout, not a tuning control, so there is no rate cursor to indicate.
 // SUB / DIV badge styling, matching SubDivIndicatorController::badgeStyle: green with black
 // text when active, otherwise a flat disabled slab.
 QString subDivBadgeStyle(bool active) {
@@ -68,6 +68,13 @@ QString subDivBadgeStyle(bool active) {
         .arg(K4Styles::Dimensions::FontSizeNormal);
 }
 
+// Frequency the way the main display renders it (FrequencyDisplayWidget::paintEvent): trailing
+// digits below the tuning-rate position in TextGray, everything else in the widget's "normal"
+// color — which SubDivIndicatorController::setVfoBDimmed swaps from TextWhite to InactiveGray
+// for VFO B while Sub RX is off. Digits and dots only, so the rich text needs no escaping.
+//
+// The trailing run is fixed at two digits here rather than tracking the tuning rate: this is a
+// readout, not a tuning control, so there is no rate cursor to indicate.
 QString freqMarkup(quint64 freq, bool dimmed) {
     const QString text = RadioUtils::formatFrequency(freq);
     if (text.length() <= 2)
@@ -77,7 +84,7 @@ QString freqMarkup(quint64 freq, bool dimmed) {
         .arg(headColor, text.left(text.length() - 2), K4Styles::Colors::TextGray, text.right(2));
 }
 
-void trimToMaxLines(QTextEdit *edit, int maxLines) {
+void trimRxPane(QTextEdit *edit, int maxLines, int maxChars) {
     QTextDocument *doc = edit->document();
     int blockCount = doc->blockCount();
     if (blockCount > maxLines) {
@@ -87,6 +94,16 @@ void trimToMaxLines(QTextEdit *edit, int maxLines) {
             cursor.movePosition(QTextCursor::EndOfBlock, QTextCursor::KeepAnchor);
             cursor.movePosition(QTextCursor::NextBlock, QTextCursor::KeepAnchor);
         }
+        cursor.removeSelectedText();
+    }
+
+    // characterCount() includes the document's trailing marker, hence the -1. Drops the oldest
+    // characters, which is what a receive log wants — the newest text is what's being read.
+    const int excess = doc->characterCount() - 1 - maxChars;
+    if (excess > 0) {
+        QTextCursor cursor(doc);
+        cursor.setPosition(0);
+        cursor.setPosition(excess, QTextCursor::KeepAnchor);
         cursor.removeSelectedText();
     }
 }
@@ -427,6 +444,7 @@ TextSendDialog::TextSendDialog(TextSendController *controller, RadioState *radio
         m_stalledBanner->setText("No confirmation from the K4 — sending stopped. Click Abort to reset.");
         m_stalledBanner->show();
         m_input->setEnabled(false);
+        refreshMacros(); // greys the macro buttons out for the duration of the stall
     });
     connect(m_controller, &TextSendController::aborted, this, &TextSendDialog::onAborted);
 
@@ -482,7 +500,9 @@ void TextSendDialog::refreshMacros() {
         const MacroEntry entry = rs->cwMacro(kSlotIds[i]);
         const QString label = entry.label.isEmpty() ? QStringLiteral("F%1").arg(i + 1) : entry.label;
         m_macroButtons[i]->setText(label);
-        m_macroButtons[i]->setEnabled(!entry.command.isEmpty()); // raw command — unaffected by token expansion
+        // Raw command — unaffected by token expansion. Also off while stalled: nothing can be
+        // sent then, and a click would otherwise look accepted while going nowhere.
+        m_macroButtons[i]->setEnabled(!entry.command.isEmpty() && !m_stalled);
     }
     refreshMacroTooltips();
 }
@@ -519,17 +539,18 @@ QString TextSendDialog::expandTokens(const QString &macroText) const {
     return result;
 }
 
-void TextSendDialog::commitText(const QString &text, bool force) {
+bool TextSendDialog::commitText(const QString &text, bool force) {
     if (m_stalled)
-        return; // controller already ignores appendChar() while stalled — don't echo grey
-                // text the K4 will never actually see
+        return false; // controller already ignores appendChar() while stalled — don't echo grey
+                      // text the K4 will never actually see
     if (!force && holdUntilEnter())
-        return; // typed/macro text stays visible in m_input only, until "Pause sending" is
-                // unchecked or Enter releases it
+        return false; // typed/macro text stays visible in m_input only, until the send mode
+                      // leaves "Enter key" or Enter releases it
     for (const QChar &ch : text) {
         appendToDisplay(ch);
         m_controller->appendChar(ch);
     }
+    return true;
 }
 
 bool TextSendDialog::activeTxIsSub() const {
@@ -617,14 +638,17 @@ void TextSendDialog::finishPendingWord(bool force) {
         return; // don't send or discard while paused — the composed reply stays in m_input
     QString remaining = m_input->text();
     if (!remaining.isEmpty()) {
+        // Cleared only if the text was actually accepted — see below.
         // Enter ends a transmission the way a space ends a word. Without this the next thing
         // sent runs straight into this one — "...PRESS ENTER NOW" followed by "AND NOW I TYPE"
         // went out as "...PRESS ENTER NOWAND NOW I TYPE". Skipped when the text already ends
         // in a space, which is how the macro path leaves it.
         if (!remaining.endsWith(QChar(' ')))
             remaining += QChar(' ');
-        commitText(remaining, force);
-        m_input->clear();
+        // Clearing unconditionally destroyed the text when commitText refused it — a macro
+        // clicked during a stall vanished with nothing sent and no feedback.
+        if (commitText(remaining, force))
+            m_input->clear();
     }
     m_controller->flush();
 }
@@ -646,7 +670,8 @@ void TextSendDialog::onInputTextEdited(const QString &text) {
 
     if (m_controller->immediateMode()) {
         // Every keystroke commits right away — the field never actually accumulates.
-        commitText(upper);
+        if (!commitText(upper))
+            return; // refused: leave it in the field rather than dropping it
         m_input->blockSignals(true);
         m_input->clear();
         m_input->blockSignals(false);
@@ -661,7 +686,8 @@ void TextSendDialog::onInputTextEdited(const QString &text) {
 
     const QString toCommit = upper.left(lastSpace + 1);
     const QString remainder = upper.mid(lastSpace + 1);
-    commitText(toCommit);
+    if (!commitText(toCommit))
+        return; // refused: keep the whole line in the field, don't drop the committed prefix
     m_input->blockSignals(true);
     m_input->setText(remainder);
     m_input->blockSignals(false);
@@ -741,7 +767,7 @@ void TextSendDialog::appendRxText(const QString &text, bool isSubRx) {
         cursor.insertText(QString(ch), fmt);
     }
     pane->moveCursor(QTextCursor::End);
-    trimToMaxLines(pane, kRxPaneMaxLines);
+    trimRxPane(pane, kRxPaneMaxLines, kRxPaneMaxChars);
 }
 
 void TextSendDialog::applySessionMode() {
@@ -936,8 +962,12 @@ void TextSendDialog::updateRxPaneVisibility() {
     // the default TX side. Sub appears once it is genuinely a place text can go: split puts TX
     // on B whether or not Sub RX is on, so this must not key off Sub RX alone or text sent on B
     // would land in a hidden pane. It also stays up while it still holds history.
-    const bool txSubOn = inThisSession(m_radioState->modeB(), m_radioState->dataSubModeB()) &&
-                         (m_radioState->splitEnabled() || m_radioState->subRxEnabled() || m_txSubLen > 0);
+    // activeTxIsSub() first and unconditionally: this is the pane appendToDisplay() writes to,
+    // so hiding it would silently swallow everything sent. Split can be switched on from the
+    // main window with VFO B in any mode at all, which the mode test below would reject.
+    const bool txSubOn = activeTxIsSub() || m_txSubLen > 0 ||
+                         (m_radioState->subRxEnabled() &&
+                          inThisSession(m_radioState->modeB(), m_radioState->dataSubModeB()));
     m_txSubText->parentWidget()->setVisible(txSubOn);
     updateTxHeaders();
 }

@@ -47,16 +47,16 @@ signals:
     // sends — the dialog has no ConnectionController of its own.
     void txSideToggleRequested();
 
-public:
-
 protected:
     void showEvent(QShowEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override; // Escape aborts sending instead of closing
     bool eventFilter(QObject *watched, QEvent *event) override; // double-click-to-grab on RX panes
 
 private:
-    // `force` bypasses the "Pause sending" gate — see onReturnPressed().
-    void commitText(const QString &text, bool force = false);
+    // `force` bypasses the hold-until-Enter gate — see onReturnPressed(). Returns false when
+    // the text was NOT accepted (stalled, or held), so callers know not to clear the input:
+    // clearing text that was never queued destroys it silently.
+    bool commitText(const QString &text, bool force = false);
     void appendToDisplay(QChar ch);
     void recolorRange(int start, int length, const QString &colorHex);
     void onAborted(); // stops sending / clears the stall state — does NOT clear the display

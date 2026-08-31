@@ -263,6 +263,18 @@ void TextDecodeWindow::trimToMaxLines() {
         }
         cursor.removeSelectedText();
     }
+
+    // Character cap as well as the line cap: decoded RTTY/PSK arrives as a character stream
+    // with no line breaks, so blockCount stays 1 and the loop above never fires. Left running
+    // overnight that grew one QTextDocument block without bound. characterCount() includes the
+    // document's trailing marker, hence the -1.
+    const int excess = doc->characterCount() - 1 - kMaxBufferChars;
+    if (excess > 0) {
+        QTextCursor cursor(doc);
+        cursor.setPosition(0);
+        cursor.setPosition(excess, QTextCursor::KeepAnchor);
+        cursor.removeSelectedText();
+    }
 }
 
 QRect TextDecodeWindow::titleBarRect() const {
