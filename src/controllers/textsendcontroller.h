@@ -218,6 +218,12 @@ private:
     static constexpr int kKyTextLimit = 60;
     static constexpr int kTimeoutSlackFactor = 4;
     static constexpr int kMinTimeoutMs = 800;
+    // FSK needs a much higher floor than CW. A single character at RTTY45 only budgets
+    // 1 x 190ms x 4 = 760ms, but if the hang timer has closed the bracket in the meantime that
+    // one character has to cover a whole RX; -> TX; -> settle -> key-up cycle before the K4
+    // can even start sending it. The old 800ms floor turned an operator typing slowly into a
+    // stall, which is the one case where stalling is most obviously wrong.
+    static constexpr int kFskMinTimeoutMs = 3000;
     static constexpr int kMaxTimeoutMs = 20000;
     // Gap between "TX;" and the first KY chunk, so the K4 is up and diddling before real
     // text starts — the FSK counterpart to CW's sacrificial 'E', without putting a stray
@@ -226,7 +232,10 @@ private:
     // How long the bracket stays open with nothing queued before "RX;" goes out. Must
     // comfortably exceed the inter-word gap of a normal typist, or word-complete mode would
     // key and un-key the radio once per word.
-    static constexpr int kTxHangMs = 700;
+    // Generous on purpose: staying keyed between words is normal RTTY practice — the K4
+    // diddles while the buffer is empty — and every drop costs a re-key cycle the next
+    // character has to pay for. 700ms was short enough that ordinary typing kept dropping TX.
+    static constexpr int kTxHangMs = 3000;
     // Per-character airtime estimates for the FSK stall timeout: Baudot is 7.5 bits/char at
     // 45.45 or 75 baud, PSK varicode averages ~6 bits/char at 31.25 or 62.5 baud. One
     // conservative number per DR setting covers both.

@@ -4,6 +4,7 @@
 #include "models/radiostate.h"
 #include "settings/radiosettings.h"
 #include "ui/styling/k4styles.h"
+#include "ui/widgets/vforowwidget.h" // VfoSquareWidget — same A/B squares the main display uses
 #include "utils/macroids.h"
 
 #include <QEvent>
@@ -26,10 +27,28 @@ const Qt::Key kSlotKeys[] = {Qt::Key_F1, Qt::Key_F2, Qt::Key_F3, Qt::Key_F4,
 
 const int kRxPaneMaxLines = 10;
 
+// Mirrors VfoSquareWidget's own paintEvent geometry: 4px top pad + 10px lock-arc space above a
+// 30px square. Used to line the TX label up with the squares' centre rather than their top.
+const int kVfoSquareTopReserve = 14;
+const int kVfoSquareBodySize = 30;
+
 // K4 CW decoder prosign punctuation (see legend label for what each means) — kept as the
 // original character but colored/bolded to stand out; replacing it with the two-letter name
 // inline read as clutter jammed against surrounding decoded text.
 const QString kProsignChars = QStringLiteral("(+=%*!");
+
+// The K4 tags each decode area with a small filled RX / TX block in that receiver's color
+// rather than a text heading — cyan for Main, green for Sub, amber for the transmitted line.
+// Same idea here so the dialog reads as part of the radio.
+QLabel *makeTag(const QString &text, const char *bgColor, QWidget *parent) {
+    auto *tag = new QLabel(text, parent);
+    tag->setAlignment(Qt::AlignCenter);
+    tag->setStyleSheet(QString("QLabel { background-color: %1; color: %2; font-weight: bold; "
+                               "font-size: %3px; padding: 1px 6px; border-radius: 2px; }")
+                           .arg(bgColor, K4Styles::Colors::DarkBackground)
+                           .arg(K4Styles::Dimensions::FontSizeMedium));
+    return tag;
+}
 
 void trimToMaxLines(QTextEdit *edit, int maxLines) {
     QTextDocument *doc = edit->document();
@@ -55,8 +74,79 @@ TextSendDialog::TextSendDialog(TextSendController *controller, RadioState *radio
     setStyleSheet(QString("QDialog { background-color: %1; }").arg(K4Styles::Colors::Background));
 
     auto *layout = new QVBoxLayout(this);
-    layout->setContentsMargins(K4Styles::Dimensions::DialogMargin, K4Styles::Dimensions::DialogMargin,
-                               K4Styles::Dimensions::DialogMargin, K4Styles::Dimensions::DialogMargin);
+    // Tighter at the top than a standard dialog: the VFO strip is a status readout, not a form
+    // field, and the decode panes are what the operator is actually reading.
+    layout->setContentsMargins(K4Styles::Dimensions::DialogMargin, K4Styles::Dimensions::DialogMargin / 2,
+                               K4Styles::Dimensions::DialogMargin, K4Styles::Dimensions::DialogMargin / 2);
+    layout->setSpacing(6);
+
+    // VFO strip, mirroring the K4's own top-of-screen layout: the A and B squares with each
+    // receiver's mode beneath, and the TX arrow between them pointing at whichever one
+    // transmits. QK4 is a remote head for the real radio, so the operator should be reading
+    // the same picture here as on the front panel. SPLIT ON/OFF is deliberately left out —
+    // the arrow already says which side is transmitting.
+    auto *vfoRow = new QHBoxLayout();
+    vfoRow->addStretch();
+
+    // Geometry copied from VfoRowWidget rather than re-guessed: VfoSquareWidget fixes its own
+    // 30x44 (the extra height is lock-arc space), the mode label is VfoSquareSize wide and
+    // centred under it, and the column spacing is 2. Overriding any of that makes the strip
+    // read as a near-miss of the main display instead of the same thing.
+    auto makeVfoColumn = [this](const QString &letter, const char *color, QLabel *&modeLabelOut,
+                               VfoSquareWidget *&squareOut) {
+        auto *container = new QWidget(this);
+        container->setFixedWidth(K4Styles::Dimensions::VfoSquareSize);
+        auto *column = new QVBoxLayout(container);
+        column->setContentsMargins(0, 0, 0, 0);
+        column->setSpacing(2);
+
+        squareOut = new VfoSquareWidget(letter, QColor(color), container);
+        column->addWidget(squareOut, 0, Qt::AlignHCenter);
+
+        modeLabelOut = new QLabel(container);
+        modeLabelOut->setFixedWidth(K4Styles::Dimensions::VfoSquareSize);
+        modeLabelOut->setAlignment(Qt::AlignCenter);
+        modeLabelOut->setStyleSheet(QString("color: %1; font-size: %2px; font-weight: bold;")
+                                        .arg(K4Styles::Colors::TextWhite)
+                                        .arg(K4Styles::Dimensions::FontSizeLarge));
+        column->addWidget(modeLabelOut, 0, Qt::AlignHCenter);
+        return container;
+    };
+
+    vfoRow->addWidget(makeVfoColumn(QStringLiteral("A"), K4Styles::Colors::VfoACyan, m_vfoAModeLabel, m_vfoASquare),
+                      0, Qt::AlignTop);
+
+    // VfoSquareWidget reserves 14px at the top of its 44 (4 pad + 10 lock arc) before the 30px
+    // square starts, so a top-aligned TX label sits above the squares rather than across them.
+    // Drop it by exactly that reserve and give it the square's own height, and its text lands
+    // on the squares' centre line — where the front panel puts it.
+    auto *txColumn = new QVBoxLayout();
+    txColumn->setContentsMargins(0, 0, 0, 0);
+    txColumn->setSpacing(0);
+    txColumn->addSpacing(kVfoSquareTopReserve);
+
+    m_txSideBtn = new QPushButton(this);
+    m_txSideBtn->setFlat(true);
+    m_txSideBtn->setCursor(Qt::PointingHandCursor);
+    m_txSideBtn->setAutoDefault(false); // same Enter-in-lineedit gotcha as the macro buttons
+    m_txSideBtn->setFixedSize(90, kVfoSquareBodySize);
+    connect(m_txSideBtn, &QPushButton::clicked, this, [this]() { emit txSideToggleRequested(); });
+    txColumn->addWidget(m_txSideBtn);
+    txColumn->addStretch();
+    vfoRow->addLayout(txColumn);
+
+    vfoRow->addWidget(makeVfoColumn(QStringLiteral("B"), K4Styles::Colors::VfoBGreen, m_vfoBModeLabel, m_vfoBSquare),
+                      0, Qt::AlignTop);
+    vfoRow->addStretch();
+    layout->addLayout(vfoRow);
+
+    connect(m_radioState, &RadioState::transmitStateChanged, this, &TextSendDialog::updateVfoStrip);
+    connect(m_radioState, &RadioState::splitChanged, this, &TextSendDialog::updateVfoStrip);
+    connect(m_radioState, &RadioState::modeChanged, this, &TextSendDialog::updateVfoStrip);
+    connect(m_radioState, &RadioState::modeBChanged, this, &TextSendDialog::updateVfoStrip);
+    connect(m_radioState, &RadioState::dataSubModeChanged, this, &TextSendDialog::updateVfoStrip);
+    connect(m_radioState, &RadioState::dataSubModeBChanged, this, &TextSendDialog::updateVfoStrip);
+    updateVfoStrip();
 
     auto *callsignRow = new QHBoxLayout();
     auto *callsignLabel = new QLabel("Working:", this); // the OTHER station's callsign, not the operator's own
@@ -80,9 +170,17 @@ TextSendDialog::TextSendDialog(TextSendController *controller, RadioState *radio
         auto *container = new QWidget(m_rxPaneContainer);
         auto *vbox = new QVBoxLayout(container);
         vbox->setContentsMargins(0, 0, 0, 0);
+        auto *headerRow = new QHBoxLayout();
+        headerRow->setContentsMargins(0, 0, 0, 2);
+        headerRow->setSpacing(6);
+        headerRow->addWidget(makeTag(QStringLiteral("RX"), borderColor, container));
         auto *label = new QLabel(labelText, container);
-        label->setStyleSheet(QString("QLabel { color: %1; font-weight: bold; }").arg(borderColor));
-        vbox->addWidget(label);
+        label->setStyleSheet(QString("QLabel { color: %1; font-size: %2px; }")
+                                 .arg(K4Styles::Colors::TextFaded)
+                                 .arg(K4Styles::Dimensions::FontSizeMedium));
+        headerRow->addWidget(label);
+        headerRow->addStretch();
+        vbox->addLayout(headerRow);
         auto *edit = new QTextEdit(container);
         edit->setReadOnly(true);
         edit->setFocusPolicy(Qt::NoFocus);
@@ -98,8 +196,8 @@ TextSendDialog::TextSendDialog(TextSendController *controller, RadioState *radio
         return std::make_pair(container, edit);
     };
 
-    auto mainPane = makeRxPane("RX Main", K4Styles::Colors::VfoACyan);
-    auto subPane = makeRxPane("RX Sub", K4Styles::Colors::VfoBGreen);
+    auto mainPane = makeRxPane("Main", K4Styles::Colors::VfoACyan);
+    auto subPane = makeRxPane("Sub", K4Styles::Colors::VfoBGreen);
     m_rxMainText = mainPane.second;
     m_rxSubText = subPane.second;
     rxPaneRow->addWidget(mainPane.first);
@@ -126,6 +224,13 @@ TextSendDialog::TextSendDialog(TextSendController *controller, RadioState *radio
                                        .arg(K4Styles::Colors::ErrorBgDark, K4Styles::Colors::ErrorRed));
     m_stalledBanner->hide();
     layout->addWidget(m_stalledBanner);
+
+    auto *txHeaderRow = new QHBoxLayout();
+    txHeaderRow->setContentsMargins(0, 0, 0, 2);
+    txHeaderRow->setSpacing(6);
+    txHeaderRow->addWidget(makeTag(QStringLiteral("TX"), K4Styles::Colors::AccentAmber, this));
+    txHeaderRow->addStretch();
+    layout->addLayout(txHeaderRow);
 
     m_display = new QTextEdit(this);
     m_display->setReadOnly(true);
@@ -512,6 +617,43 @@ void TextSendDialog::updateInputPlaceholder() {
     // Enter is what actually sends.
     const QString verb = m_pauseSendCheck->isChecked() ? QStringLiteral("Enter") : QStringLiteral("Type");
     m_input->setPlaceholderText(QStringLiteral("%1 here to send %2...").arg(verb, m_sessionLabel));
+}
+
+void TextSendDialog::updateVfoStrip() {
+    const QString modeA = m_radioState->modeStringFull();
+    const QString modeB = m_radioState->modeStringFullB();
+    m_vfoAModeLabel->setText(modeA);
+    m_vfoBModeLabel->setText(modeB);
+
+    // Split is what moves the TX VFO on the K4: off = transmit on A, on = transmit on B. The
+    // arrow points at whichever side is live, same as the front panel's.
+    // Both forms are the same length so "TX" stays put and only the arrow moves side to side,
+    // the way the front panel's two triangles flank a stationary TX label.
+    const bool txOnB = m_radioState->splitEnabled();
+    m_txSideBtn->setText(txOnB ? QStringLiteral("TX ▶") : QStringLiteral("◀ TX"));
+
+    // While the radio is actually keyed, the transmitting VFO's square goes red — the same
+    // TxRed the main display already flips its TX indicator to (TxStateController). The other
+    // square keeps its identity color, so at a glance you can still tell A from B, and there
+    // is never any doubt about which side is live.
+    const bool transmitting = m_radioState->isTransmitting();
+    m_vfoASquare->setColor(QColor(transmitting && !txOnB ? K4Styles::Colors::TxRed : K4Styles::Colors::VfoACyan));
+    m_vfoBSquare->setColor(QColor(transmitting && txOnB ? K4Styles::Colors::TxRed : K4Styles::Colors::VfoBGreen));
+
+    // Only offer the switch when both VFOs are in the same mode — including the DATA sub-mode,
+    // which is why this compares the full mode strings rather than mode() alone. Flipping TX
+    // onto a VFO in a different mode would silently change what the radio transmits.
+    const bool switchable = (modeA == modeB) && !modeA.isEmpty();
+    m_txSideBtn->setEnabled(switchable);
+    m_txSideBtn->setToolTip(switchable ? QStringLiteral("Switch which VFO transmits")
+                                       : QStringLiteral("Both VFOs must be in the same mode to switch TX sides"));
+    // FontSizeIndicator is what the main display's TX label and triangles use.
+    m_txSideBtn->setStyleSheet(
+        QString("QPushButton { color: %1; background: transparent; border: none; font-weight: bold; "
+                "font-size: %2px; } QPushButton:disabled { color: %3; }")
+            .arg(transmitting ? K4Styles::Colors::TxRed : K4Styles::Colors::AccentAmber)
+            .arg(K4Styles::Dimensions::FontSizeIndicator)
+            .arg(K4Styles::Colors::InactiveGray));
 }
 
 void TextSendDialog::appendSessionDivider(const QString &label) {

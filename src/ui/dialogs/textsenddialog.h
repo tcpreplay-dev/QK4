@@ -14,6 +14,7 @@
 
 class TextSendController;
 class RadioState;
+class VfoSquareWidget;
 
 /**
  * @brief Modeless dialog for typing text to be keyed as CW on the K4, via TextSendController.
@@ -40,6 +41,13 @@ public:
     // clearing it — see appendSessionDivider().
     void applySessionMode();
 
+signals:
+    // The TX-side arrow was clicked. MainWindow turns this into the same CAT the SPLIT button
+    // sends — the dialog has no ConnectionController of its own.
+    void txSideToggleRequested();
+
+public:
+
 protected:
     void showEvent(QShowEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override; // Escape aborts sending instead of closing
@@ -63,6 +71,8 @@ private:
     void appendRxText(const QString &text, bool isSubRx);
     void updateRxPaneVisibility();
     void appendSessionDivider(const QString &label);
+    // Repaints the A / TX / B strip from the radio's split and per-VFO modes.
+    void updateVfoStrip();
     // "Type here" vs "Enter here" — the verb that actually sends depends on the pause state.
     void updateInputPlaceholder();
     static bool looksLikeCallsign(const QString &word);
@@ -78,6 +88,11 @@ private:
     QCheckBox *m_immediateModeCheck = nullptr;
     QCheckBox *m_pauseSendCheck = nullptr; // while checked, typed/macro text accumulates but nothing is sent
     QLabel *m_stalledBanner = nullptr;
+    QLabel *m_vfoAModeLabel = nullptr; // mode under the A square, as on the K4's own display
+    QLabel *m_vfoBModeLabel = nullptr;
+    QPushButton *m_txSideBtn = nullptr; // the TX arrow; clickable only when both VFOs match
+    VfoSquareWidget *m_vfoASquare = nullptr; // recolored red while this VFO is transmitting
+    VfoSquareWidget *m_vfoBSquare = nullptr;
     QVector<QPushButton *> m_macroButtons;
 
     QWidget *m_rxPaneContainer = nullptr; // holds legend + both RX panes; hidden when neither decode is running

@@ -236,7 +236,8 @@ void TextSendController::startTimeoutForCurrentChunk() {
         // inter-character spacing); the slack factor absorbs R/W waits and network jitter on top.
         expectedMs = qMax(1, m_inFlight.length) * 10.0 * ditMs;
     }
-    const int timeoutMs = qBound(kMinTimeoutMs, static_cast<int>(expectedMs * kTimeoutSlackFactor), kMaxTimeoutMs);
+    const int floorMs = (m_sessionMode == SessionMode::Fsk) ? kFskMinTimeoutMs : kMinTimeoutMs;
+    const int timeoutMs = qBound(floorMs, static_cast<int>(expectedMs * kTimeoutSlackFactor), kMaxTimeoutMs);
     m_timeoutTimer->start(timeoutMs);
 }
 

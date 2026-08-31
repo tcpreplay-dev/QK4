@@ -769,6 +769,11 @@ void MainWindow::setupUi() {
     connect(m_bottomMenuBar, &BottomMenuBar::textSendRequested, this, [this]() {
         if (!m_textSendDialog) {
             m_textSendDialog = new TextSendDialog(m_textSendController, m_radioState, this);
+            // Same CAT the right-panel SPLIT button sends (rightsidecontroller.cpp): split is
+            // what moves the TX VFO on the K4, and SW145 is the path already proven against
+            // the radio — the app has never sent a bare FT0/FT1 and doesn't know if it echoes.
+            connect(m_textSendDialog, &TextSendDialog::txSideToggleRequested, this,
+                    [this]() { m_connectionController->sendCAT("SW145;"); });
         } else {
             m_textSendDialog->refreshMacros();
         }
