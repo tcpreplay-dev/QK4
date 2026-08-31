@@ -25,6 +25,13 @@ struct TextDecodeState {
     int textDecodeThresholdB = -1;
     int textDecodeLinesB = -1;
 
+    // First field of a TB / TB$ response: how much text the radio still has queued to
+    // transmit. Confirmed against hardware — it ramps up and drains back to 0 for the whole of
+    // a message-memory playback, and TB and TB$ always carry the same value at the same
+    // instant, so it is one global figure rather than per-receiver. Never accompanied by text:
+    // the text in a TB frame is always RECEIVED text.
+    int txBufferLevel = -1;
+
     // Reset all fields to their sentinel "never received" values so the
     // first post-reconnect echo fires a change signal.
     void reset();
@@ -36,8 +43,8 @@ namespace TextDecodeHandlers {
 // RadioState (for emit).
 void handleTD(TextDecodeState &state, RadioState &owner, const QString &cmd);
 void handleTDSub(TextDecodeState &state, RadioState &owner, const QString &cmd);
-void handleTB(RadioState &owner, const QString &cmd);
-void handleTBSub(RadioState &owner, const QString &cmd);
+void handleTB(TextDecodeState &state, RadioState &owner, const QString &cmd);
+void handleTBSub(TextDecodeState &state, RadioState &owner, const QString &cmd);
 
 // Optimistic setters used by MainWindow when it issues TD SET to the K4
 // (the K4 does not echo DT / TD SET commands, so RadioState mutates the

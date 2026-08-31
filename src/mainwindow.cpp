@@ -777,6 +777,10 @@ void MainWindow::setupUi() {
             // Same CAT the right-panel SPLIT button sends (rightsidecontroller.cpp): split is
             // what moves the TX VFO on the K4, and SW145 is the path already proven against
             // the radio — the app has never sent a bare FT0/FT1 and doesn't know if it echoes.
+            // M1-M4 taps carry no CAT echo, so this is the only way the dialog can label a
+            // playback it detects. Presses on the radio's own front panel stay anonymous.
+            connect(m_memoryButtonsController, &MemoryButtonsController::messageMemoryPressed, m_textSendDialog,
+                    &TextSendDialog::noteMessageMemoryPressed);
             connect(m_textSendDialog, &TextSendDialog::txSideToggleRequested, this,
                     [this]() { m_connectionController->sendCAT("SW145;"); });
         } else {

@@ -13,6 +13,7 @@
 #include "models/radiostate.h"
 #include "ui/dialogs/textsenddialog.h"
 
+#include <QTextEdit>
 #include <QtTest/QtTest>
 
 class TestTextSendDialog : public QObject {
@@ -71,6 +72,51 @@ private slots:
         state.parseCATCommand("FT1;"); // TX moves to VFO B — sent text goes to the other pane
         state.parseCATCommand("FT0;"); // ...and back
         QVERIFY(true);
+    }
+    // A message-memory playback carries no text over CAT — the K4 renders its own TX row
+    // locally — so the dialog marks it from the TB TX-buffer level instead, labelled with the
+    // button QK4 last tapped.
+    void messageMemoryPlaybackIsMarkedInTheTxPane() {
+        RadioState state;
+        TextSendController controller;
+        TextSendDialog dialog(&controller, &state, nullptr);
+        state.parseCATCommand("MD6;");
+        state.parseCATCommand("DT2;");
+        controller.setSessionMode(TextSendController::SessionMode::Fsk);
+        dialog.applySessionMode();
+
+        dialog.noteMessageMemoryPressed(1);
+        state.parseCATCommand("TB100;"); // radio starts transmitting buffered text
+
+        QVERIFY(paneContains(dialog, "M1 message sent"));
+    }
+
+    // The same level rise happens for our own sends, and must NOT be marked — otherwise every
+    // typed transmission would be annotated as if the radio had originated it.
+    void ownSendIsNotMarkedAsARadioMessage() {
+        RadioState state;
+        TextSendController controller;
+        TextSendDialog dialog(&controller, &state, nullptr);
+        state.parseCATCommand("MD3;"); // CW: no TX bracket to complicate the active window
+        controller.setSessionMode(TextSendController::SessionMode::Cw);
+        dialog.applySessionMode();
+
+        for (QChar ch : QStringLiteral("CQ "))
+            controller.appendChar(ch);
+        QVERIFY(controller.isActive());
+
+        state.parseCATCommand("TB100;");
+        QVERIFY(!paneContains(dialog, "message sent"));
+    }
+
+private:
+    static bool paneContains(const TextSendDialog &dialog, const QString &needle) {
+        const auto panes = dialog.findChildren<QTextEdit *>();
+        for (QTextEdit *pane : panes) {
+            if (pane->toPlainText().contains(needle))
+                return true;
+        }
+        return false;
     }
 };
 

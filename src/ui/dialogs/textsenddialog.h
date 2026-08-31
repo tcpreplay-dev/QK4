@@ -10,6 +10,7 @@
 #include <QPushButton>
 #include <QShowEvent>
 #include <QTextEdit>
+#include <QElapsedTimer>
 #include <QVector>
 #include <QWidget>
 
@@ -42,6 +43,11 @@ public:
     // clearing it — see appendSessionDivider().
     void applySessionMode();
 
+    // Tells the dialog which message memory the operator just started from QK4, so a playback
+    // it detects can be labelled. Presses on the radio's own front panel are invisible to us
+    // and fall back to a generic label.
+    void noteMessageMemoryPressed(int index);
+
 signals:
     // The TX-side arrow was clicked. MainWindow turns this into the same CAT the SPLIT button
     // sends — the dialog has no ConnectionController of its own.
@@ -72,6 +78,11 @@ private:
     void appendRxText(const QString &text, bool isSubRx);
     void updateRxPaneVisibility();
     void appendSessionDivider(const QString &label);
+    // Inserts one dialog-authored line into the active TX pane — a session divider or a
+    // message-memory marker. Not operator text, so the controller never counted it: the
+    // current offset segment has to end here and a fresh one start after it.
+    void appendTxNote(const QString &text, bool onlyIfPaneHasText);
+    void onTxBufferLevelChanged(int level);
     // Which pane sent text currently goes to: the transmitting VFO, same rule as everywhere else.
     bool activeTxIsSub() const;
     QTextEdit *activeTxPane() const;
@@ -142,6 +153,12 @@ private:
     int m_txMainLen = 0;   // document length of each pane, tracked rather than queried
     int m_txSubLen = 0;
     bool m_stalled = false; // blocks further typing/macros until abort() resets the dialog
+
+    // Message-memory playback detection. The TB TX-buffer level rising from idle while our own
+    // pipeline is quiet means the radio started a transmission we did not queue.
+    int m_txBufferLevel = 0;
+    int m_lastMemoryIndex = 0; // 1-4, or 0 when we don't know which one
+    QElapsedTimer m_memoryPressAge;
 
     QString m_sessionLabel;          // "CW" / "AFSK" / "FSK" / "PSK"; empty until first applied
     bool m_prosignsEnabled = true;   // CW only — the prosign characters are literal in RTTY/PSK

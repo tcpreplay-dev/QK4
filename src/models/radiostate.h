@@ -522,6 +522,8 @@ public:
     // Text Decode (TD$$ command) - Sub RX
     int textDecodeModeB() const { return m_textDecodeState.textDecodeModeB; }
     int textDecodeThresholdB() const { return m_textDecodeState.textDecodeThresholdB; }
+    // 0 = nothing queued to transmit; > 0 while the radio has buffered text going out.
+    int txBufferLevel() const { return m_textDecodeState.txBufferLevel; }
     int textDecodeLinesB() const { return m_textDecodeState.textDecodeLinesB; }
 
     // XVTR per-band config — backed by m_xvtrBandState.
@@ -698,7 +700,10 @@ signals:
     // Text Decode
     void textDecodeChanged();                                   // TD$ command - Main RX settings changed
     void textDecodeBChanged();                                  // TD$$ command - Sub RX settings changed
-    void textBufferReceived(const QString &text, bool isSubRx); // TB$ decoded text
+    void textBufferReceived(const QString &text, bool isSubRx);
+    // TB/TB$ first field: how much text the radio still has queued to transmit. Rises and
+    // drains for a message-memory playback as well as for our own KY sends.
+    void txBufferLevelChanged(int level); // TB$ decoded text
 
 private:
     // Frequency / VFO / split / RIT/XIT state — see radiostate/frequencyvfostate.h.

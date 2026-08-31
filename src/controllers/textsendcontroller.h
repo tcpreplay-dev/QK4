@@ -112,6 +112,11 @@ public:
     void setImmediateMode(bool immediate);
     bool immediateMode() const { return m_immediateMode; }
 
+    // True while anything is queued, pending, in flight, or holding an FSK TX bracket open —
+    // i.e. while the radio is transmitting on OUR account. Lets callers tell our own traffic
+    // apart from a message the radio originated by itself.
+    bool isActive() const { return m_active; }
+
 public slots:
     // Feed raw CAT responses here (connect from ConnectionController::catResponseReceived).
     // Filters for bare "KY0"/"KY1" tokens; everything else is ignored.

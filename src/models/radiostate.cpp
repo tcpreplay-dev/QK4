@@ -1026,10 +1026,10 @@ void RadioState::handleTDSub(const QString &cmd) {
     TextDecodeHandlers::handleTDSub(m_textDecodeState, *this, cmd);
 }
 void RadioState::handleTB(const QString &cmd) {
-    TextDecodeHandlers::handleTB(*this, cmd);
+    TextDecodeHandlers::handleTB(m_textDecodeState, *this, cmd);
 }
 void RadioState::handleTBSub(const QString &cmd) {
-    TextDecodeHandlers::handleTBSub(*this, cmd);
+    TextDecodeHandlers::handleTBSub(m_textDecodeState, *this, cmd);
 }
 
 // =============================================================================

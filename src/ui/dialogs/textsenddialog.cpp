@@ -36,6 +36,11 @@ const int kRxPaneMaxLines = 10;
 // show and still bounded.
 const int kRxPaneMaxChars = 16 * 1024;
 
+// How long after QK4 sends an M1-M4 switch tap a detected transmission is still attributed to
+// that button. Long enough to cover the radio starting the message, short enough that an
+// unrelated later transmission isn't mislabelled.
+const int kMemoryPressWindowMs = 5000;
+
 // Mirrors VfoSquareWidget's own paintEvent geometry: 4px top pad + 10px lock-arc space above a
 // 30px square. Used to line the TX label up with the squares' centre rather than their top.
 const int kVfoSquareTopReserve = 14;
@@ -455,6 +460,10 @@ TextSendDialog::TextSendDialog(TextSendController *controller, RadioState *radio
 
     connect(m_radioState, &RadioState::textBufferReceived, this,
             [this](const QString &text, bool isSubRx) { appendRxText(text, isSubRx); });
+    // Message-memory playbacks have no text we can read (the K4 renders its own TX row locally
+    // and publishes nothing), but the TB TX-buffer level does tell us one went out — see
+    // onTxBufferLevelChanged().
+    connect(m_radioState, &RadioState::txBufferLevelChanged, this, &TextSendDialog::onTxBufferLevelChanged);
     connect(m_radioState, &RadioState::textDecodeChanged, this, &TextSendDialog::updateRxPaneVisibility);
     connect(m_radioState, &RadioState::textDecodeBChanged, this, &TextSendDialog::updateRxPaneVisibility);
     // Pane visibility also depends on each receiver's own mode and on whether Sub RX is even
@@ -902,20 +911,25 @@ void TextSendDialog::updateVfoStrip() {
 }
 
 void TextSendDialog::appendSessionDivider(const QString &label) {
-    QTextEdit *pane = activeTxPane();
-    if (activeTxLen() == 0)
-        return; // nothing above it to separate
-
     // The history is deliberately NOT cleared on a mode switch: TextSendController's own
     // character offsets are monotonic and survive its reset (see resetAll()), so wiping a pane
-    // would silently desync every later recolor.
-    const QString divider = QStringLiteral("\n--- %1 ---\n").arg(label);
+    // would silently desync every later recolor. A divider separates instead — and only when
+    // there is something above it to separate.
+    appendTxNote(label, /*onlyIfPaneHasText=*/true);
+}
+
+void TextSendDialog::appendTxNote(const QString &text, bool onlyIfPaneHasText) {
+    QTextEdit *pane = activeTxPane();
+    if (onlyIfPaneHasText && activeTxLen() == 0)
+        return;
+
+    const QString note = QStringLiteral("\n--- %1 ---\n").arg(text);
     QTextCursor cursor(pane->document());
     cursor.movePosition(QTextCursor::End);
     QTextCharFormat fmt;
     fmt.setForeground(QColor(K4Styles::Colors::TextFaded));
-    cursor.insertText(divider, fmt);
-    activeTxLen() += divider.length();
+    cursor.insertText(note, fmt);
+    activeTxLen() += note.length();
 
     // These characters are the dialog's own — the controller never counted them — so the
     // current segment has to end here and a fresh one start after them.
@@ -923,6 +937,34 @@ void TextSendDialog::appendSessionDivider(const QString &label) {
 
     pane->moveCursor(QTextCursor::End);
     pane->ensureCursorVisible();
+}
+
+void TextSendDialog::noteMessageMemoryPressed(int index) {
+    m_lastMemoryIndex = index;
+    m_memoryPressAge.start();
+}
+
+void TextSendDialog::onTxBufferLevelChanged(int level) {
+    const int previous = m_txBufferLevel;
+    m_txBufferLevel = level;
+
+    // Only the idle -> busy edge marks the start of a transmission.
+    if (level <= 0 || previous > 0)
+        return;
+    // Our own sends raise the same level; the controller stays active for all of one, bracket
+    // and hang included, so this is what separates its traffic from the radio's own.
+    if (m_controller->isActive())
+        return;
+
+    // The memory buttons are bare switch taps with no CAT echo, so the only thing tying a
+    // playback to a button is that QK4 sent the tap itself moments earlier. A press on the
+    // radio's front panel, or a stale one, gets the generic wording.
+    const bool recent = m_lastMemoryIndex > 0 && m_memoryPressAge.isValid() &&
+                        m_memoryPressAge.elapsed() < kMemoryPressWindowMs;
+    appendTxNote(recent ? QStringLiteral("M%1 message sent").arg(m_lastMemoryIndex)
+                        : QStringLiteral("radio message sent"),
+                 /*onlyIfPaneHasText=*/false);
+    m_lastMemoryIndex = 0;
 }
 
 void TextSendDialog::updateRxPaneVisibility() {
