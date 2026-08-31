@@ -1,5 +1,5 @@
-#ifndef CWSENDDIALOG_H
-#define CWSENDDIALOG_H
+#ifndef TEXTSENDDIALOG_H
+#define TEXTSENDDIALOG_H
 
 #include <QCheckBox>
 #include <QDialog>
@@ -12,11 +12,11 @@
 #include <QVector>
 #include <QWidget>
 
-class CwSendController;
+class TextSendController;
 class RadioState;
 
 /**
- * @brief Modeless dialog for typing text to be keyed as CW on the K4, via CwSendController.
+ * @brief Modeless dialog for typing text to be keyed as CW on the K4, via TextSendController.
  *
  * The line edit holds only the word currently being typed (freely editable, including
  * backspace) — a finished word (space/Enter) moves into the read-only history area below as
@@ -25,11 +25,11 @@ class RadioState;
  * `KY0` confirms it was actually keyed, red if that confirmation times out. Nothing brightens
  * on a local timing guess — only on real K4 feedback.
  */
-class CwSendDialog : public QDialog {
+class TextSendDialog : public QDialog {
     Q_OBJECT
 
 public:
-    explicit CwSendDialog(CwSendController *controller, RadioState *radioState, QWidget *parent = nullptr);
+    explicit TextSendDialog(TextSendController *controller, RadioState *radioState, QWidget *parent = nullptr);
 
     void refreshMacros();
 
@@ -57,7 +57,7 @@ private:
     static bool looksLikeCallsign(const QString &word);
     void handleRxDoubleClick(QTextEdit *pane, const QPoint &pos);
 
-    CwSendController *m_controller; // not owned
+    TextSendController *m_controller; // not owned
     RadioState *m_radioState;       // not owned
 
     QLineEdit *m_callsignEdit = nullptr; // station currently being worked; session-local, not persisted
@@ -74,8 +74,8 @@ private:
     QTextEdit *m_rxMainText = nullptr;
     QTextEdit *m_rxSubText = nullptr;
 
-    int m_displayLength = 0; // character offsets here must match CwSendController's own count
+    int m_displayLength = 0; // character offsets here must match TextSendController's own count
     bool m_stalled = false;  // blocks further typing/macros until abort() resets the dialog
 };
 
-#endif // CWSENDDIALOG_H
+#endif // TEXTSENDDIALOG_H

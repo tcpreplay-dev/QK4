@@ -1,19 +1,19 @@
-#include "cwsendcontroller.h"
+#include "textsendcontroller.h"
 
 #include <QStringList>
 #include <QtGlobal>
 
-CwSendController::CwSendController(QObject *parent) : QObject(parent) {
+TextSendController::TextSendController(QObject *parent) : QObject(parent) {
     m_pollTimer = new QTimer(this);
     m_pollTimer->setSingleShot(true); // re-armed manually each tick — see pollTick()
-    connect(m_pollTimer, &QTimer::timeout, this, &CwSendController::pollTick);
+    connect(m_pollTimer, &QTimer::timeout, this, &TextSendController::pollTick);
 
     m_timeoutTimer = new QTimer(this);
     m_timeoutTimer->setSingleShot(true);
-    connect(m_timeoutTimer, &QTimer::timeout, this, &CwSendController::onChunkTimeout);
+    connect(m_timeoutTimer, &QTimer::timeout, this, &TextSendController::onChunkTimeout);
 }
 
-void CwSendController::appendChar(QChar ch) {
+void TextSendController::appendChar(QChar ch) {
     if (m_stalled || !m_cwModeActive)
         return;
 
@@ -26,14 +26,14 @@ void CwSendController::appendChar(QChar ch) {
     maybeDispatchNext();
 }
 
-void CwSendController::flush() {
+void TextSendController::flush() {
     if (m_stalled || !m_cwModeActive)
         return;
     cutPendingChunk();
     maybeDispatchNext();
 }
 
-void CwSendController::cutPendingChunk() {
+void TextSendController::cutPendingChunk() {
     if (m_pendingText.isEmpty())
         return;
 
@@ -54,7 +54,7 @@ void CwSendController::cutPendingChunk() {
     m_pendingText.clear();
 }
 
-void CwSendController::maybeDispatchNext() {
+void TextSendController::maybeDispatchNext() {
     if (m_stalled || m_hasInFlight) {
         updateActiveState();
         return;
@@ -95,13 +95,13 @@ void CwSendController::maybeDispatchNext() {
 
     startTimeoutForCurrentChunk();
     // First poll deliberately delayed longer than the steady-state cadence — see the
-    // "first KY; poll" note in cwsendcontroller.h.
+    // "first KY; poll" note in textsendcontroller.h.
     m_pollTimer->start(kFirstPollDelayMs);
 
     updateActiveState();
 }
 
-void CwSendController::pollTick() {
+void TextSendController::pollTick() {
     if (!m_hasInFlight)
         return; // nothing to confirm — timer simply doesn't get re-armed
     emit sendCatRequested(QStringLiteral("KY;"));
@@ -111,7 +111,7 @@ void CwSendController::pollTick() {
     m_pollTimer->start(kPollIntervalMs);
 }
 
-void CwSendController::onCatResponse(const QString &response) {
+void TextSendController::onCatResponse(const QString &response) {
     const QStringList commands = response.split(';', Qt::SkipEmptyParts);
     for (const QString &cmd : commands) {
         if (cmd == QLatin1String("KY0")) {
@@ -128,7 +128,7 @@ void CwSendController::onCatResponse(const QString &response) {
     updateActiveState();
 }
 
-void CwSendController::onDisconnected() {
+void TextSendController::onDisconnected() {
     // A stalled chunk already dropped m_active to false (nothing left queued/in-flight to
     // suppress hardware CW over), but the dialog is still showing a stalled banner and a
     // disabled input at that point — a disconnect must still reach it via aborted().
@@ -138,7 +138,7 @@ void CwSendController::onDisconnected() {
     emit aborted();
 }
 
-void CwSendController::abort() {
+void TextSendController::abort() {
     resetAll();
     // Always sent, even with nothing queued — this is the panic button, and matches the
     // existing ESC-shortcut convention elsewhere in the app of unconditionally forcing RX;
@@ -147,16 +147,16 @@ void CwSendController::abort() {
     emit aborted();
 }
 
-void CwSendController::setImmediateMode(bool immediate) {
+void TextSendController::setImmediateMode(bool immediate) {
     m_immediateMode = immediate;
 }
 
-void CwSendController::setKeyerSpeed(int wpm) {
+void TextSendController::setKeyerSpeed(int wpm) {
     if (wpm > 0)
         m_wpm = wpm;
 }
 
-void CwSendController::startTimeoutForCurrentChunk() {
+void TextSendController::startTimeoutForCurrentChunk() {
     const double ditMs = 1200.0 / qBound(8, m_wpm, 100);
     // ~10 dit-units per character is a rough PARIS-timing average (letters + inter-element/
     // inter-character spacing); the slack factor absorbs R/W waits and network jitter on top.
@@ -165,7 +165,7 @@ void CwSendController::startTimeoutForCurrentChunk() {
     m_timeoutTimer->start(timeoutMs);
 }
 
-void CwSendController::onChunkTimeout() {
+void TextSendController::onChunkTimeout() {
     if (!m_hasInFlight)
         return;
     m_stalled = true;
@@ -181,7 +181,7 @@ void CwSendController::onChunkTimeout() {
     updateActiveState();
 }
 
-void CwSendController::setCwModeActive(bool active) {
+void TextSendController::setCwModeActive(bool active) {
     if (m_cwModeActive == active)
         return;
     m_cwModeActive = active;
@@ -194,7 +194,7 @@ void CwSendController::setCwModeActive(bool active) {
     }
 }
 
-void CwSendController::resetAll() {
+void TextSendController::resetAll() {
     m_queue.clear();
     m_pendingText.clear();
     m_hasInFlight = false;
@@ -202,12 +202,12 @@ void CwSendController::resetAll() {
     m_pollTimer->stop();
     m_timeoutTimer->stop();
     // m_pendingStart is NOT reset here — it's a monotonic character offset shared with the
-    // dialog's own display-length bookkeeping (see CwSendDialog), so text already shown stays
+    // dialog's own display-length bookkeeping (see TextSendDialog), so text already shown stays
     // at the same coordinates and abort() doesn't have to wipe the screen to stay in sync.
     updateActiveState();
 }
 
-void CwSendController::updateActiveState() {
+void TextSendController::updateActiveState() {
     const bool active = m_hasInFlight || !m_queue.isEmpty() || !m_pendingText.isEmpty();
     if (active != m_active) {
         m_active = active;

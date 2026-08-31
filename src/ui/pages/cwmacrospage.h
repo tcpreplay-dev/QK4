@@ -7,7 +7,7 @@
 
 /**
  * @brief Options page for the CW Send dialog: eight canned-message macro slots (label +
- *        message text, with token substitution — see CwSendDialog::expandTokens()).
+ *        message text, with token substitution — see TextSendDialog::expandTokens()).
  *
  * Macro editing lives here, not in the CW Send dialog itself — mirrors how the Keyer/
  * Straight Key pages hold settings for the CW Send dialog's hardware-keying counterparts.

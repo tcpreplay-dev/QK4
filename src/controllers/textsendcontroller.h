@@ -1,5 +1,5 @@
-#ifndef CWSENDCONTROLLER_H
-#define CWSENDCONTROLLER_H
+#ifndef TEXTSENDCONTROLLER_H
+#define TEXTSENDCONTROLLER_H
 
 #include <QObject>
 #include <QString>
@@ -7,7 +7,7 @@
 #include <QVector>
 
 // =============================================================================
-// CwSendController — types text into the K4's own CW/DATA text buffer (KY)
+// TextSendController — types text into the K4's own CW/DATA text buffer (KY)
 // =============================================================================
 //
 // Distinct from CwController: that class orchestrates hardware-driven keying
@@ -58,11 +58,11 @@
 // phone-mode radio.
 // =============================================================================
 
-class CwSendController : public QObject {
+class TextSendController : public QObject {
     Q_OBJECT
 
 public:
-    explicit CwSendController(QObject *parent = nullptr);
+    explicit TextSendController(QObject *parent = nullptr);
 
     // Feeds one typed character into the pipeline. In word-complete mode a
     // chunk is cut (and dispatch attempted) on space/CR/LF; in immediate
@@ -167,4 +167,4 @@ private:
     static constexpr int kMaxTimeoutMs = 20000;
 };
 
-#endif // CWSENDCONTROLLER_H
+#endif // TEXTSENDCONTROLLER_H

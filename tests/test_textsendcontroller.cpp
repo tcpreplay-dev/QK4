@@ -1,25 +1,25 @@
-// Behavioral tests for CwSendController — the state machine that turns typed text into
+// Behavioral tests for TextSendController — the state machine that turns typed text into
 // K4 `KY*[text];` sends, confirmed strictly serially by polling `KY;` for `KY0`/`KY1`.
 //
-// CwSendController is deliberately decoupled from ConnectionController/TcpClient (see its
+// TextSendController is deliberately decoupled from ConnectionController/TcpClient (see its
 // header): it only emits sendCatRequested(QString) and expects onCatResponse()/
 // onDisconnected() fed from outside. That means these tests drive it exactly like a real
 // K4 link would — feeding synthetic "KY0;"/"KY1;" strings back in — without any network
 // stack or live radio.
 
-#include "controllers/cwsendcontroller.h"
+#include "controllers/textsendcontroller.h"
 #include <QSignalSpy>
 #include <QtTest/QtTest>
 
-class TestCwSendController : public QObject {
+class TestTextSendController : public QObject {
     Q_OBJECT
 
 private slots:
     // Nothing sends until the radio is confirmed in CW mode — the dialog is modeless and can
     // outlive a mode change, so this must not depend on the dialog closing itself.
     void appendCharNoOpsUntilCwModeConfirmed() {
-        CwSendController ctrl;
-        QSignalSpy sent(&ctrl, &CwSendController::sendCatRequested);
+        TextSendController ctrl;
+        QSignalSpy sent(&ctrl, &TextSendController::sendCatRequested);
         for (QChar ch : QStringLiteral("CQ "))
             ctrl.appendChar(ch);
         QCOMPARE(sent.count(), 0);
@@ -33,10 +33,10 @@ private slots:
     // Leaving CW mode mid-send resets the pipeline (like abort()) but must NOT send "RX;" —
     // that's the operator's own mode change, not a fault to panic-stop over.
     void leavingCwModeResetsWithoutSendingRx() {
-        CwSendController ctrl;
+        TextSendController ctrl;
         ctrl.setCwModeActive(true);
-        QSignalSpy sent(&ctrl, &CwSendController::sendCatRequested);
-        QSignalSpy aborted(&ctrl, &CwSendController::aborted);
+        QSignalSpy sent(&ctrl, &TextSendController::sendCatRequested);
+        QSignalSpy aborted(&ctrl, &TextSendController::aborted);
 
         for (QChar ch : QStringLiteral("CQ "))
             ctrl.appendChar(ch);
@@ -55,9 +55,9 @@ private slots:
     // Typing a word without a trailing boundary character sends nothing yet — word-complete
     // mode (the default) only cuts a chunk on space/CR/LF.
     void wordCompleteWaitsForBoundary() {
-        CwSendController ctrl;
+        TextSendController ctrl;
         ctrl.setCwModeActive(true); // appendChar()/flush() no-op until the radio is confirmed in CW mode
-        QSignalSpy sent(&ctrl, &CwSendController::sendCatRequested);
+        QSignalSpy sent(&ctrl, &TextSendController::sendCatRequested);
         for (QChar ch : QStringLiteral("HELLO"))
             ctrl.appendChar(ch);
         QCOMPARE(sent.count(), 0);
@@ -67,9 +67,9 @@ private slots:
     // the header note on why querying too soon after the write is risky. This only checks
     // the delay is real, not the exact hardware-dependent duration.
     void firstPollIsDelayedLongerThanStandardCadence() {
-        CwSendController ctrl;
+        TextSendController ctrl;
         ctrl.setCwModeActive(true);
-        QSignalSpy sent(&ctrl, &CwSendController::sendCatRequested);
+        QSignalSpy sent(&ctrl, &TextSendController::sendCatRequested);
 
         for (QChar ch : QStringLiteral("CQ "))
             ctrl.appendChar(ch);
@@ -86,11 +86,11 @@ private slots:
     // A completed word sends exactly one KY chunk and reports it in-flight; it only reports
     // confirmed once a real KY0 arrives, never before.
     void wordCompleteSendsOnBoundaryAndConfirmsOnKY0() {
-        CwSendController ctrl;
+        TextSendController ctrl;
         ctrl.setCwModeActive(true); // appendChar()/flush() no-op until the radio is confirmed in CW mode
-        QSignalSpy sent(&ctrl, &CwSendController::sendCatRequested);
-        QSignalSpy inFlight(&ctrl, &CwSendController::chunkInFlight);
-        QSignalSpy confirmed(&ctrl, &CwSendController::chunkConfirmed);
+        QSignalSpy sent(&ctrl, &TextSendController::sendCatRequested);
+        QSignalSpy inFlight(&ctrl, &TextSendController::chunkInFlight);
+        QSignalSpy confirmed(&ctrl, &TextSendController::chunkConfirmed);
 
         for (QChar ch : QStringLiteral("CQ "))
             ctrl.appendChar(ch);
@@ -114,9 +114,9 @@ private slots:
     // Strictly serial: a second word typed while the first is still in flight must not be
     // sent until the first is confirmed.
     void secondChunkWaitsForFirstConfirm() {
-        CwSendController ctrl;
+        TextSendController ctrl;
         ctrl.setCwModeActive(true); // appendChar()/flush() no-op until the radio is confirmed in CW mode
-        QSignalSpy sent(&ctrl, &CwSendController::sendCatRequested);
+        QSignalSpy sent(&ctrl, &TextSendController::sendCatRequested);
 
         for (QChar ch : QStringLiteral("CQ "))
             ctrl.appendChar(ch);
@@ -137,11 +137,11 @@ private slots:
     // Immediate mode cuts a chunk per character but merges whatever's queued at dispatch time
     // into one send — confirming the whole outstanding run at once, not per character.
     void immediateModeMergesQueuedCharsIntoOneSend() {
-        CwSendController ctrl;
+        TextSendController ctrl;
         ctrl.setCwModeActive(true); // appendChar()/flush() no-op until the radio is confirmed in CW mode
         ctrl.setImmediateMode(true);
-        QSignalSpy sent(&ctrl, &CwSendController::sendCatRequested);
-        QSignalSpy inFlight(&ctrl, &CwSendController::chunkInFlight);
+        QSignalSpy sent(&ctrl, &TextSendController::sendCatRequested);
+        QSignalSpy inFlight(&ctrl, &TextSendController::chunkInFlight);
 
         // First char dispatches immediately (nothing else queued yet).
         ctrl.appendChar('A');
@@ -163,11 +163,11 @@ private slots:
     // A chunk that never gets its KY0 must be marked stalled, not silently confirmed, and
     // must stop the pipeline (no further sends) until abort() clears it.
     void timeoutMarksChunkStalledAndHaltsPipeline() {
-        CwSendController ctrl;
+        TextSendController ctrl;
         ctrl.setCwModeActive(true); // appendChar()/flush() no-op until the radio is confirmed in CW mode
         ctrl.setKeyerSpeed(60); // fast WPM keeps the derived timeout short but still bounded
-        QSignalSpy stalled(&ctrl, &CwSendController::chunkStalled);
-        QSignalSpy confirmed(&ctrl, &CwSendController::chunkConfirmed);
+        QSignalSpy stalled(&ctrl, &TextSendController::chunkStalled);
+        QSignalSpy confirmed(&ctrl, &TextSendController::chunkConfirmed);
 
         for (QChar ch : QStringLiteral("K "))
             ctrl.appendChar(ch);
@@ -175,7 +175,7 @@ private slots:
         QCOMPARE(confirmed.count(), 0);
 
         // Pipeline halted: further typed text must not dispatch until abort() resets it.
-        QSignalSpy sent(&ctrl, &CwSendController::sendCatRequested);
+        QSignalSpy sent(&ctrl, &TextSendController::sendCatRequested);
         for (QChar ch : QStringLiteral("MORE "))
             ctrl.appendChar(ch);
         QCOMPARE(sent.count(), 0);
@@ -190,10 +190,10 @@ private slots:
 
     // abort() clears everything queued/pending and forces the K4 out of TX via RX;.
     void abortClearsQueueAndSendsRx() {
-        CwSendController ctrl;
+        TextSendController ctrl;
         ctrl.setCwModeActive(true); // appendChar()/flush() no-op until the radio is confirmed in CW mode
-        QSignalSpy sent(&ctrl, &CwSendController::sendCatRequested);
-        QSignalSpy aborted(&ctrl, &CwSendController::aborted);
+        QSignalSpy sent(&ctrl, &TextSendController::sendCatRequested);
+        QSignalSpy aborted(&ctrl, &TextSendController::aborted);
 
         for (QChar ch : QStringLiteral("CQ "))
             ctrl.appendChar(ch);
@@ -212,9 +212,9 @@ private slots:
     // hardware-CW suppression gate, so it must go true on the first send and false once
     // everything drains.
     void activeChangedTracksQueueLifecycle() {
-        CwSendController ctrl;
+        TextSendController ctrl;
         ctrl.setCwModeActive(true); // appendChar()/flush() no-op until the radio is confirmed in CW mode
-        QSignalSpy active(&ctrl, &CwSendController::activeChanged);
+        QSignalSpy active(&ctrl, &TextSendController::activeChanged);
 
         for (QChar ch : QStringLiteral("HI "))
             ctrl.appendChar(ch);
@@ -229,10 +229,10 @@ private slots:
     // A disconnect mid-send must abort exactly like the manual abort path, but must not try
     // to send "RX;" over a dead link.
     void disconnectAbortsWithoutSendingRx() {
-        CwSendController ctrl;
+        TextSendController ctrl;
         ctrl.setCwModeActive(true); // appendChar()/flush() no-op until the radio is confirmed in CW mode
-        QSignalSpy sent(&ctrl, &CwSendController::sendCatRequested);
-        QSignalSpy aborted(&ctrl, &CwSendController::aborted);
+        QSignalSpy sent(&ctrl, &TextSendController::sendCatRequested);
+        QSignalSpy aborted(&ctrl, &TextSendController::aborted);
 
         for (QChar ch : QStringLiteral("CQ "))
             ctrl.appendChar(ch);
@@ -248,5 +248,5 @@ private slots:
     }
 };
 
-QTEST_GUILESS_MAIN(TestCwSendController)
-#include "test_cwsendcontroller.moc"
+QTEST_GUILESS_MAIN(TestTextSendController)
+#include "test_textsendcontroller.moc"

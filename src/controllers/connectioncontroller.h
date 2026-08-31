@@ -60,8 +60,8 @@ public:
     void setKpodPlusKeyerActive(bool active) { m_kpodPlusKeyerActive.store(active, std::memory_order_release); }
     bool isKpodPlusKeyerActive() const { return m_kpodPlusKeyerActive.load(std::memory_order_acquire); }
 
-    // CwSendController ownership gate. Written from the main thread (wired to
-    // CwSendController::activeChanged) while a typed CW message is queued/in-flight/pending.
+    // TextSendController ownership gate. Written from the main thread (wired to
+    // TextSendController::activeChanged) while a typed CW message is queued/in-flight/pending.
     // Read on the I/O thread by the same iambic/straight-key gate checks as
     // m_kpodPlusKeyerActive above, so a text send and hardware-driven keying can't interleave
     // onto the wire. Same acquire/release discipline.
