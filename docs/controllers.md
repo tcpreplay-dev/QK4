@@ -40,6 +40,9 @@ Last updated: architectural endgame refactor — RightSideController, MemoryButt
 | "Menu overlay / MEDF system not working" | MenuController | `src/controllers/menucontroller.cpp` |
 | "Feature menu bar (ATTN/NB/NR/NOTCH) not working" | FeatureMenuController | `src/controllers/featuremenucontroller.cpp` |
 | "Text decode window not opening / updating" | TextDecodeController | `src/controllers/textdecodecontroller.cpp` |
+| "TEXT DECODE turns itself on/off when I change to or from AFSK/FSK/PSK" | TextDecodeController | same |
+| "PTT button reads CW/AFSK/FSK/PSK, or won't open the text send dialog" | MainWindow::updateActiveTextMode | `src/mainwindow.cpp` |
+| "Typed CW/FSK text not going out, or stalls" | TextSendController | `src/controllers/textsendcontroller.cpp` |
 | "Band/Display/Fn/Main RX/Sub RX/TX popup won't open or close" | PopupManager | `src/controllers/popupmanager.cpp` |
 | "Fn popup macro buttons not sending CAT" | MacroController | `src/controllers/macrocontroller.cpp` |
 | "PF1-PF4 / F1-F12 keyboard shortcuts / KPOD macro buttons" | MacroController | same |
@@ -106,7 +109,8 @@ Grouped by concern:
 - **TxStateController** — TX triangles + indicator colors + VFO meter mode flip + PA current calc
 - **RitXitController** — RIT/XIT label state + wheel accumulator + click handlers + BSet-aware display routing
 - **KPA1500UiController** — KPA1500 mini panel + amp status + client lifecycle
-- **TextDecodeController** — text decode window lifecycle + CAT dispatch
+- **TextDecodeController** — text decode window lifecycle + CAT dispatch (plus the FSK auto-enable/restore of the decoder, `applyFskAutoDecode`)
+- **TextSendController** — types text into the K4's `KY` buffer for CW and the FSK data sub-modes (AFSK-A / FSK-D / PSK-D): chunking, `KY0` confirmation, stall detection, and the FSK TX;/RX; bracket. Not a hardware keyer — see `cwcontroller.h` for that
 
 ---
 

@@ -43,8 +43,8 @@ class FeatureMenuController;
 class ModePopupController;
 class HardwareController;
 class CwController;
-class CwSendController;
-class CwSendDialog;
+class TextSendController;
+class TextSendDialog;
 class DxClusterController;
 class KPA1500UiController;
 class CatServer;
@@ -94,6 +94,12 @@ private:
     void setupSpectrumDataRouting();
     void setupHardwareController();
     void setupCatServer();
+
+    // Recomputes what the far-right bottom-bar button is (PTT / CW / AFSK / FSK / PSK) and
+    // which text-send session the controller should be in, from the B SET-selected receiver's
+    // mode and DATA sub-mode, and keeps the FSK auto-decode and stall-timeout inputs in step.
+    // Fanned in from nine RadioState signals — see setupUi().
+    void updateActiveTextMode();
 
     void updateConnectionState(TcpClient::ConnectionState state);
     // Disconnect-path helper — owners of their own state each implement a
@@ -187,7 +193,9 @@ private:
     SideControlScrollController *m_sideControlScrollController;
     RightSideController *m_rightSideController;
     MemoryButtonsController *m_memoryButtonsController;
-    TextDecodeController *m_textDecodeController;
+    // Nullptr-initialized because updateActiveTextMode() can run before setupControllers()
+    // finishes wiring, and its guards must test a real value.
+    TextDecodeController *m_textDecodeController = nullptr;
     AntennaConfigController *m_antennaCfgController;
     AntennaDisplayController *m_antennaDisplayController;
     FeatureMenuController *m_featureMenuController;
@@ -196,10 +204,10 @@ private:
     // Hardware controller (owns KPOD, HaliKey, IambicKeyer, SidetoneGenerator and their threads)
     HardwareController *m_hardwareController;
     CwController *m_cwController;
-    CwSendController *m_cwSendController;
+    TextSendController *m_textSendController = nullptr; // see m_textDecodeController
 
-    // CW Send dialog (lazy-created on first open, launched from the CW-mode BottomMenuBar button)
-    CwSendDialog *m_cwSendDialog = nullptr;
+    // Text send dialog (lazy-created on first open, launched from the CW/FSK BottomMenuBar button)
+    TextSendDialog *m_textSendDialog = nullptr;
 
     // KPA1500 amplifier UI controller (owns the KPA1500Client)
     KPA1500UiController *m_kpa1500UiController;

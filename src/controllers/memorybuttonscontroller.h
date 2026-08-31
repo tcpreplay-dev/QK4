@@ -27,6 +27,12 @@ public:
                             QObject *parent = nullptr);
     ~MemoryButtonsController() override;
 
+signals:
+    // M1-M4 was clicked here (1-4). These are bare front-panel switch taps with no CAT echo, so
+    // this is the only way anything downstream can know which memory the operator started —
+    // and only when they started it from QK4 rather than the radio's own panel.
+    void messageMemoryPressed(int index);
+
 protected:
     // Catches right-clicks on REC / STORE / RCL — sends the alternate SW
     // command. Other events fall through unmodified.

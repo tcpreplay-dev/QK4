@@ -21,6 +21,9 @@ public:
     void setLocked(bool locked);
     bool isLocked() const { return m_locked; }
 
+    // Repaints the square in a different color — used to flag the transmitting VFO red.
+    void setColor(const QColor &color);
+
 protected:
     void paintEvent(QPaintEvent *event) override;
 

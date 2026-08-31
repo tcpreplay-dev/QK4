@@ -2,31 +2,9 @@
 
 #include "models/radiostate.h"
 #include "ui/widgets/vfowidget.h"
+#include "utils/radioutils.h"
 
 #include <QString>
-
-namespace {
-
-// Format a Hz frequency as "XX.XXX.XXX" grouped-3-from-right.
-QString formatFrequency(quint64 freq) {
-    QString freqStr = QString::number(freq);
-    while (freqStr.length() < 8)
-        freqStr.prepend('0');
-    QString formatted;
-    const int len = freqStr.length();
-    for (int i = 0; i < len; i++) {
-        formatted.append(freqStr[i]);
-        const int posFromEnd = len - i - 1;
-        if (posFromEnd > 0 && posFromEnd % 3 == 0)
-            formatted.append('.');
-    }
-    // Frequencies < 10 MHz (160m-40m) render without a leading zero.
-    if (formatted.startsWith('0'))
-        formatted = formatted.mid(1);
-    return formatted;
-}
-
-} // namespace
 
 VfoFrequencyController::VfoFrequencyController(RadioState *radioState, VFOWidget *vfoA, VFOWidget *vfoB,
                                                QObject *parent)
@@ -66,7 +44,7 @@ void VfoFrequencyController::onFrequencyChanged(quint64 freq) {
         if (rxFreq > 0)
             freq = static_cast<quint64>(rxFreq);
     }
-    m_vfoA->setFrequency(formatFrequency(freq));
+    m_vfoA->setFrequency(RadioUtils::formatFrequency(freq));
 }
 
 void VfoFrequencyController::onFrequencyBChanged(quint64 freq) {
@@ -82,5 +60,5 @@ void VfoFrequencyController::onFrequencyBChanged(quint64 freq) {
         if (rxFreq > 0)
             freq = static_cast<quint64>(rxFreq);
     }
-    m_vfoB->setFrequency(formatFrequency(freq));
+    m_vfoB->setFrequency(RadioUtils::formatFrequency(freq));
 }

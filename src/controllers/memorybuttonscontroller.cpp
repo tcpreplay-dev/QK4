@@ -12,10 +12,22 @@ MemoryButtonsController::MemoryButtonsController(ConnectionController *connectio
     : QObject(parent), m_connection(connection), m_recBtn(rec), m_storeBtn(store), m_rclBtn(rcl) {
 
     // Primary (left-click) actions — map each button to its K4 SW command.
-    connect(m1, &QPushButton::clicked, this, [this]() { m_connection->sendCAT("SW17;"); });
-    connect(m2, &QPushButton::clicked, this, [this]() { m_connection->sendCAT("SW51;"); });
-    connect(m3, &QPushButton::clicked, this, [this]() { m_connection->sendCAT("SW18;"); });
-    connect(m4, &QPushButton::clicked, this, [this]() { m_connection->sendCAT("SW52;"); });
+    connect(m1, &QPushButton::clicked, this, [this]() {
+        m_connection->sendCAT("SW17;");
+        emit messageMemoryPressed(1);
+    });
+    connect(m2, &QPushButton::clicked, this, [this]() {
+        m_connection->sendCAT("SW51;");
+        emit messageMemoryPressed(2);
+    });
+    connect(m3, &QPushButton::clicked, this, [this]() {
+        m_connection->sendCAT("SW18;");
+        emit messageMemoryPressed(3);
+    });
+    connect(m4, &QPushButton::clicked, this, [this]() {
+        m_connection->sendCAT("SW52;");
+        emit messageMemoryPressed(4);
+    });
     connect(rec, &QPushButton::clicked, this, [this]() { m_connection->sendCAT("SW19;"); });
     connect(store, &QPushButton::clicked, this, [this]() { m_connection->sendCAT("SW20;"); });
     connect(rcl, &QPushButton::clicked, this, [this]() { m_connection->sendCAT("SW34;"); });

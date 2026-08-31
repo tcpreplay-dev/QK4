@@ -19,6 +19,13 @@ void VfoSquareWidget::setLocked(bool locked) {
     }
 }
 
+void VfoSquareWidget::setColor(const QColor &color) {
+    if (m_color != color) {
+        m_color = color;
+        update();
+    }
+}
+
 void VfoSquareWidget::paintEvent(QPaintEvent *) {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);

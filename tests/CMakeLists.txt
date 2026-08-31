@@ -216,15 +216,44 @@ target_include_directories(test_iambickeyer PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(test_iambickeyer Qt6::Core Qt6::Test)
 add_test(NAME IambicKeyerTests COMMAND test_iambickeyer)
 
-# CwSendController state machine — chunking/confirm/timeout logic, driven with synthetic
+# TextSendController state machine — chunking/confirm/timeout logic, driven with synthetic
 # KY0/KY1 responses. Decoupled from ConnectionController/TcpClient by design, so no network
 # linkage is needed here.
-add_executable(test_cwsendcontroller test_cwsendcontroller.cpp
-    ${CMAKE_SOURCE_DIR}/src/controllers/cwsendcontroller.cpp
+add_executable(test_textsendcontroller test_textsendcontroller.cpp
+    ${CMAKE_SOURCE_DIR}/src/controllers/textsendcontroller.cpp
 )
-target_include_directories(test_cwsendcontroller PRIVATE ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(test_cwsendcontroller Qt6::Core Qt6::Test)
-add_test(NAME CwSendControllerTests COMMAND test_cwsendcontroller)
+target_include_directories(test_textsendcontroller PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_textsendcontroller Qt6::Core Qt6::Test)
+add_test(NAME TextSendControllerTests COMMAND test_textsendcontroller)
+
+# Widget-level smoke test for the send dialog. Uses the offscreen platform plugin so it needs no
+# display; added after a null-deref in the constructor shipped because nothing built a widget.
+add_executable(test_textsenddialog test_textsenddialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/controllers/textsendcontroller.cpp
+    ${CMAKE_SOURCE_DIR}/src/ui/dialogs/textsenddialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/ui/widgets/vforowwidget.cpp
+    ${CMAKE_SOURCE_DIR}/src/ui/styling/k4styles.cpp
+    ${CMAKE_SOURCE_DIR}/src/settings/radiosettings.cpp
+    ${CMAKE_SOURCE_DIR}/src/utils/radioutils.cpp
+    ${CMAKE_SOURCE_DIR}/src/models/radiostate.cpp
+    ${CMAKE_SOURCE_DIR}/src/models/radiostate/antennastate.cpp
+    ${CMAKE_SOURCE_DIR}/src/models/radiostate/audioeffectsstate.cpp
+    ${CMAKE_SOURCE_DIR}/src/models/radiostate/datacontrolstate.cpp
+    ${CMAKE_SOURCE_DIR}/src/models/radiostate/frequencyvfostate.cpp
+    ${CMAKE_SOURCE_DIR}/src/models/radiostate/levelsstate.cpp
+    ${CMAKE_SOURCE_DIR}/src/models/radiostate/modefilterstate.cpp
+    ${CMAKE_SOURCE_DIR}/src/models/radiostate/powerstate.cpp
+    ${CMAKE_SOURCE_DIR}/src/models/radiostate/processingstate.cpp
+    ${CMAKE_SOURCE_DIR}/src/models/radiostate/qskcontrolstate.cpp
+    ${CMAKE_SOURCE_DIR}/src/models/radiostate/rxtxmeterstate.cpp
+    ${CMAKE_SOURCE_DIR}/src/models/radiostate/spectrumdisplaystate.cpp
+    ${CMAKE_SOURCE_DIR}/src/models/radiostate/textdecodestate.cpp
+    ${CMAKE_SOURCE_DIR}/src/models/radiostate/xvtrbandstate.cpp
+)
+target_include_directories(test_textsenddialog PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_textsenddialog Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::Test)
+add_test(NAME TextSendDialogTests COMMAND test_textsenddialog)
+set_tests_properties(TextSendDialogTests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # KPOD+ USB worker — pure-logic tests (command builders, EP02 trim, response decoder)
 add_executable(test_kpodplususbworker test_kpodplususbworker.cpp

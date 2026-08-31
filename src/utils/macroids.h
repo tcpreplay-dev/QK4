@@ -28,7 +28,7 @@ const QString FnF8 = "Fn.F8";
 // Special buttons
 const QString RemAnt = "REM_ANT";
 
-// CW Send dialog macro slots (canned CW messages, distinct from the CAT-command
+// Text send dialog macro slots (canned messages for CW and FSK, distinct from the CAT-command
 // macros above — see RadioSettings::cwMacro()/setCwMacro()).
 const QString CwMacro1 = "CW.Macro1";
 const QString CwMacro2 = "CW.Macro2";

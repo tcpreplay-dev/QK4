@@ -32,6 +32,15 @@ public:
     QPushButton *txButton() const { return m_txBtn; }
     QPushButton *pttButton() const { return m_pttBtn; }
 
+    // What the far-right button is currently acting as.
+    //   Voice — momentary mic PTT (press/release), the original behavior.
+    //   Cw    — CW mode: the K4 is keyed via CAT, not mic audio.
+    //   Fsk   — a text data sub-mode (AFSK-A / FSK-D / PSK-D): same story, the
+    //           K4 generates the signal from KY text.
+    // In both non-Voice modes the button becomes a launcher for the text send
+    // dialog and a plain click emits textSendRequested().
+    enum class TextMode { Voice, Cw, Fsk };
+
 public slots:
     void setMenuActive(bool active);    // Toggle MENU button inverse colors
     void setDisplayActive(bool active); // Toggle DISPLAY button inverse colors
@@ -42,13 +51,13 @@ public slots:
     void setTxActive(bool active);      // Toggle TX button inverse colors
     void setPttActive(bool active);     // Toggle PTT button inverse colors
 
-    // Relabels the far-right button PTT <-> CW and switches its click behavior. PTT is
-    // meaningless in CW (K4 is keyed via CAT, not mic audio) so the button becomes a launcher
-    // for the CW Send dialog instead. If the right-click PTT latch is engaged at the moment
-    // this flips to true, it is force-released first so the radio can't be stranded in TX
-    // with no way to drop it (mirrors CwController's V1.4 PTT-destination cleanup on mode
-    // change — same class of hazard).
-    void setCwMode(bool cwMode);
+    // Relabels the far-right button and switches its click behavior. The label is supplied by
+    // the caller rather than derived here, so the Fsk case can show the actual sub-mode
+    // ("AFSK" / "FSK" / "PSK") without this widget having to know about RadioState. If the
+    // right-click PTT latch is engaged at the moment this leaves Voice, it is force-released
+    // first so the radio can't be stranded in TX with no way to drop it (mirrors CwController's
+    // V1.4 PTT-destination cleanup on mode change — same class of hazard).
+    void setTextMode(TextMode mode, const QString &label);
 
 signals:
     void menuClicked();
@@ -60,7 +69,7 @@ signals:
     void txClicked();
     void pttPressed();  // PTT button pressed (start TX audio)
     void pttReleased(); // PTT button released (stop TX audio)
-    void cwSendRequested(); // CW button clicked while in CW mode — open the CW Send dialog
+    void textSendRequested(); // CW/FSK button clicked — open the text send dialog
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
@@ -80,7 +89,7 @@ private:
     QPushButton *m_pttBtn;
 
     bool m_pttLocked = false;
-    bool m_cwMode = false;
+    TextMode m_textMode = TextMode::Voice;
     QTimer *m_pttLockTimer = nullptr;
 };
 

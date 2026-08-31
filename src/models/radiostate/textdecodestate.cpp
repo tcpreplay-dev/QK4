@@ -11,6 +11,7 @@ void TextDecodeState::reset() {
     textDecodeModeB = -1;
     textDecodeThresholdB = -1;
     textDecodeLinesB = -1;
+    txBufferLevel = -1;
 }
 
 namespace TextDecodeHandlers {
@@ -61,9 +62,21 @@ void handleTDSub(TextDecodeState &state, RadioState &owner, const QString &cmd) 
         emit owner.textDecodeBChanged();
 }
 
-void handleTB(RadioState &owner, const QString &cmd) {
+// Shared by both variants: prefixLen is 2 for "TB", 3 for "TB$", after which the layout is
+// one TX-buffer digit, a two-digit count of the received characters, then those characters.
+void handleTxBufferLevel(TextDecodeState &state, RadioState &owner, const QString &cmd, int prefixLen) {
+    bool ok = false;
+    const int level = cmd.mid(prefixLen, 1).toInt(&ok);
+    if (!ok || level == state.txBufferLevel)
+        return;
+    state.txBufferLevel = level;
+    emit owner.txBufferLevelChanged(level);
+}
+
+void handleTB(TextDecodeState &state, RadioState &owner, const QString &cmd) {
     if (cmd.length() < 5)
         return;
+    handleTxBufferLevel(state, owner, cmd, 2);
     QString text = cmd.mid(5);
     if (text.endsWith(';'))
         text.chop(1);
@@ -71,9 +84,10 @@ void handleTB(RadioState &owner, const QString &cmd) {
         emit owner.textBufferReceived(text, false);
 }
 
-void handleTBSub(RadioState &owner, const QString &cmd) {
+void handleTBSub(TextDecodeState &state, RadioState &owner, const QString &cmd) {
     if (cmd.length() < 6)
         return;
+    handleTxBufferLevel(state, owner, cmd, 3);
     QString text = cmd.mid(6);
     if (text.endsWith(';'))
         text.chop(1);
