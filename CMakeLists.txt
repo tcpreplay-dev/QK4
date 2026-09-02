@@ -82,6 +82,7 @@ set(SOURCES
     src/mainwindow.cpp
     src/utils/radioutils.cpp
     src/utils/bandplan.cpp
+    src/utils/k4macrobackup.cpp
     src/controllers/connectioncontroller.cpp
     src/controllers/hardwarecontroller.cpp
     src/controllers/audiocontroller.cpp
@@ -277,6 +278,7 @@ set(HEADERS
     src/models/radiostate/xvtrbandstate.h
     src/models/menumodel.h
     src/utils/macroids.h
+    src/utils/k4macrobackup.h
     src/ui/dialogs/radiomanagerdialog.h
     src/ui/widgets/dualcontrolbutton.h
     src/ui/widgets/sidecontrolpanel.h

@@ -5,6 +5,7 @@ Shared helper functions. Any helper needed in more than one translation unit goe
 ## Files
 
 - `radioutils.{cpp,h}` — `RadioUtils::` namespace. Frequency → band (11 bands + gaps), band edges, tuning step tables, span-dial stepping with K4 quirks.
+- `k4macrobackup.{cpp,h}` — `K4MacroBackup::` namespace. Parses the `k4macros.json` the K4's backup utility (Fn > hold BACKUP) writes under `K4_SN<serial>/`, translating its slot names (`Kpod.1T`, `REM.ANT`) to `MacroIds`. Pure parsing — the user picks the file from Options > K-Pod; nothing scans volumes.
 
 ## Rule 1 — No duplicated static functions
 

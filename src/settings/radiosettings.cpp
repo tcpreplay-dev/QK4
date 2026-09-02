@@ -328,6 +328,23 @@ void RadioSettings::setMacro(const QString &functionId, const QString &label, co
     }
 }
 
+int RadioSettings::setMacros(const QMap<QString, MacroEntry> &macros) {
+    int written = 0;
+    for (auto it = macros.constBegin(); it != macros.constEnd(); ++it) {
+        if (it->command.isEmpty())
+            continue;
+        MacroEntry entry = it.value();
+        entry.functionId = it.key();
+        m_macros[it.key()] = entry;
+        ++written;
+    }
+    if (written > 0) {
+        save();
+        emit macrosChanged();
+    }
+    return written;
+}
+
 QString RadioSettings::halikeyPortName() const {
     return m_halikeyPortName;
 }

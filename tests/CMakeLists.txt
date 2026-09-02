@@ -122,6 +122,14 @@ target_include_directories(test_bandplan PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(test_bandplan Qt6::Core Qt6::Gui Qt6::Test)
 add_test(NAME BandPlanTests COMMAND test_bandplan)
 
+# K4 backup macro import (k4macros.json slot-name translation)
+add_executable(test_k4macrobackup test_k4macrobackup.cpp
+    ${CMAKE_SOURCE_DIR}/src/utils/k4macrobackup.cpp
+)
+target_include_directories(test_k4macrobackup PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_k4macrobackup Qt6::Core Qt6::Test)
+add_test(NAME K4MacroBackupTests COMMAND test_k4macrobackup)
+
 # MenuModel parsing + label resolution tests
 add_executable(test_menumodel test_menumodel.cpp
     ${CMAKE_SOURCE_DIR}/src/models/menumodel.cpp

@@ -106,6 +106,9 @@ public:
     QMap<QString, MacroEntry> macros() const;
     MacroEntry macro(const QString &functionId) const;
     void setMacro(const QString &functionId, const QString &label, const QString &command);
+    // Bulk import. Overwrites the named slots only, skips command-less entries, and
+    // saves + emits macrosChanged once rather than per entry. Returns slots written.
+    int setMacros(const QMap<QString, MacroEntry> &macros);
 
     // HaliKey CW Keyer settings
     QString halikeyPortName() const;

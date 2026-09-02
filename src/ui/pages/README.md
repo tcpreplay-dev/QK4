@@ -11,7 +11,7 @@ Tab pages for `OptionsDialog`. Each is a `QWidget` that plugs into the dialog's 
 - `cwkeyerpage` — HaliKey + iambic keyer config.
 - `dxclusterpage` — per-cluster host/port/callsign + auto-connect list.
 - `kpa1500page` — KPA1500 host/port config.
-- `kpodpage` — KPOD button bindings + enable.
+- `kpodpage` — KPOD enable + device summary, a read-only view of the 16 K-Pod button macros (F1-F8 tap/hold; `MacroDialog` owns editing), "Import from K4 Backup...", and KPOD+ keyer config.
 
 ## Pattern
 
